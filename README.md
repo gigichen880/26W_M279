@@ -1,6 +1,4 @@
-# 26W_M279
-
-## Similarity-Based Forecasting Pipeline
+# Similarity-Based Forecasting Pipeline
 
 This module implements a **similarity-based forecasting framework** for financial time series, designed to be **modular, extensible, and free of lookahead bias**.
 
@@ -20,16 +18,13 @@ For each anchor time ( t ):
 1. **Raw input window**
 
    * Past returns:
-     [
-     X_t = R_{t-L+1:t} \in \mathbb{R}^{L \times N}
-     ]
+<b>X<sub>t</sub> = R<sub>t−L+1:t</sub> ∈ ℝ<sup>L×N</sup></b>
 
 2. **Embedding (feature engineering)**
 
    * A `WindowEmbedder` maps the raw window to a fixed-dimensional vector:
-     [
-     e_t = f(X_t) \in \mathbb{R}^{D}
-     ]
+**e**<sub>t</sub> = *f*(**X**<sub>t</sub>) ∈ ℝ<sup>D</sup>
+
    * All feature engineering (e.g. correlation structure, volatility statistics, eigen-spectra) lives **inside the embedder**.
 
 3. **Similarity search**
@@ -39,9 +34,8 @@ For each anchor time ( t ):
 4. **Target construction**
 
    * A `TargetObject` computes the forecast target using *future* returns only:
-     [
-     Y_t = g(R_{t+1:t+H})
-     ]
+**Y**<sub>t</sub> = *g*(**R**<sub>t+1:t+H</sub>)
+
    * Targets may be volatility vectors, correlation matrices, covariance matrices, etc.
 
 5. **Aggregation**
@@ -66,8 +60,8 @@ For each anchor time ( t ):
 
 * **Lookahead-safe by construction**
 
-  * Similarity uses only past data ([t-L+1, t])
-  * Targets use only future data ([t+1, t+H])
+  * Similarity uses only past data (t-L+1, t)
+  * Targets use only future data (t+1, t+H)
   * Asset filtering and NA handling are performed as-of the lookback window
 
 ---
