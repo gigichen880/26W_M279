@@ -8,7 +8,7 @@ Large source files are not tracked in git:
 - `raw/pvCLCL_matrix.csv.zip`: Same data in CSV form.
 - `raw/data_by_stocks/`: Minutely price data archives (`.7z` files).
 
-## Processed Data (gitignored)
+## Processed Data
 
 - `processed/minutely_daily_returns.parquet`: Daily returns extracted from minutely data (515 stocks, 2007–2021).
 - `processed/minutely_daily_closes.parquet`: Daily closes from minutely data.
