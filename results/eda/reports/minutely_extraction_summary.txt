@@ -1,0 +1,15 @@
+MINUTELY EXTRACTION SUMMARY
+============================================================
+Total .7z files processed: 516
+Successfully extracted stocks: 515
+Failed extractions: 1
+Date range of final dataset: 2000-01-03 00:00:00 to 2021-12-31 00:00:00
+Final universe size: 39
+Included tickers:
+  AMD, ATVI, BIIB, DAL, DE, F, HBAN, HPQ, KSS, M, NKE, OXY, SLB, SPY, STX
+  UA, WYNN, XLE, ADSK, APA, CTSH, GS, NEM, NTAP, REGN, AKAM, GPS, LRCX, XLF, YUM
+  ADI, ETN, HAS, XLU, HES, HOG, NOV, PHM, PBCT
+
+Correlation with pvCLCL (sample): None
+
+Mega-caps confirmed present: 

@@ -1,3 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+.pytest_cache/
 .ipynb_checkpoints/
-data/20*/
+
+# Data files (too large for git)
+data/raw/
+data/processed/*.parquet
+*.parquet
+*.parquet.zip
+*.csv.zip
+*.7z
+
+# Temporary files
+.tmp_extract/
+archive/
+archive_eda/
+*.tmp
+*.log
+get-pip.py
+.mplconfig/
+matrix_inspection_report.txt
+inspection_figures/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
+
+# Results (can commit small ones, ignore large)
+results/eda/figures/*.png
+results/eda/reports/*.csv
+results/eda/reports/*.parquet
+
+# Keep these small files
+!data/universes/*.csv
+!data/universes/*.txt

@@ -1,0 +1,10 @@
+Final universe selection (FINAL)
+============================================================
+1. Mega-caps (20) are force-included first.
+   If a mega-cap failed filters but has recent_availability_pct >= 80%,
+   it is still included (override).
+2. Hard filters: recent_avail >= 85%, avail >= 70%, gap <= 365d, extreme_days <= 50.
+3. ETFs excluded from pool: SPY, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLU, XLV, XLY, IYR.
+4. Remaining slots filled by composite score (0.5*recent_avail + 0.5*overall_avail).
+5. FINAL_UNIVERSE_150_FINAL.csv = mega-caps (in order) + top 150 - len(mega) by score.
+6. FINAL_UNIVERSE_100_FINAL.csv = same logic for 100 stocks.

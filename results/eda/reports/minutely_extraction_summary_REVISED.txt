@@ -1,0 +1,21 @@
+MINUTELY EXTRACTION SUMMARY (REVISED FILTERS)
+============================================================
+What went wrong with original filters: too strict.
+- Availability >= 50% and recent >= 80% excluded many good names.
+- Gap > 30 days and any single extreme return excluded volatile stocks.
+- Mega-caps (AAPL, MSFT, etc.) did not pass; we need them.
+
+How filters were relaxed:
+- Overall availability >= 30.0% (was 50%)
+- Recent (2015-2021) >= 70.0% (was 80%)
+- Gap > 180 trading days (was 30)
+- Outlier: |return| > 0.5 (50%%), exclude only if > 10 days (was any > 100%%)
+- Mega-caps force-included. ETFs removed.
+
+Final universe size: 8
+Tickers:
+  AAPL, AMZN, FB, GOOG, GOOGL, MSFT, NFLX, NVDA
+
+Mega-caps included: ['AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'NVDA', 'FB', 'NFLX']
+Date range: 2007-06-27 00:00:00 to 2021-12-31 00:00:00
+Mean recent availability (2015-2021): 92.7%

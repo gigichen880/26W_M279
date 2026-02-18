@@ -1,0 +1,23 @@
+FILTERING DIAGNOSIS REPORT
+============================================================
+
+1. Distribution of quality metrics across 515 stocks
+   See quality_metrics_all_515.csv and quality_metrics_histograms.png
+
+2. Why 507 stocks originally failed (relaxed filters)
+   Thresholds were: avail>=30.0%, recent>=70.0%, gap<=180d, extreme_days<=10
+   Most failures were likely due to: longest_gap (consecutive NaN days) or extreme_days.
+
+3. Data-driven thresholds applied
+   availability_pct >= 40%
+   recent_availability_pct >= 85%
+   longest_gap <= 187.89999999999992 days
+   extreme_days <= 10
+
+4. Final universe composition
+   Size: 150 stocks
+   Mega-caps included: ['AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'NVDA', 'FB', 'NFLX']
+   Mean recent availability: 97.6%
+
+5. Conclusion
+   Data quality is acceptable for covariance forecasting with 100-150 stocks.
