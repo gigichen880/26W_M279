@@ -6,8 +6,8 @@ This project implements similarity-based covariance forecasting for US equities 
 
 ## Team
 
-- [Your name]
-- [Teammate name]
+- Devansh Mishra
+- Zhiyi Chen
 
 ## Project Structure
 
