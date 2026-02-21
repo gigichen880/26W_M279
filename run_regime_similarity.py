@@ -8,7 +8,7 @@ from similarity_forecast.regimes import RegimeModel
 from similarity_forecast.pipeline import RegimeAwareSimilarityForecaster
 
 # returns_df: index=dates, columns=tickers, values=daily returns
-returns_df = pd.read_parquet("returns.parquet")  # <-- replace
+returns_df = pd.read_parquet("returns.parquet")  # TODO: replace with data path
 
 embedder = CorrEigenEmbedder(k=32)
 target = CovarianceTarget(ddof=1)
