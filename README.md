@@ -20,7 +20,7 @@ This project implements similarity-based covariance forecasting for US equities 
 ├── notebooks/          # Jupyter notebooks for EDA
 ├── results/            # Analysis outputs (figures, reports)
 ├── archive/            # Old attempts (gitignored)
-└── pipeline/           # Main forecasting pipeline (coming soon)
+└── similarity_forecast/           # Main forecasting pipeline
 ```
 
 ## Data
@@ -63,9 +63,192 @@ python scripts/universe_selection/select_final_universe.py
 jupyter notebook notebooks/data_prep_eda.ipynb
 ```
 
-### Main Pipeline (coming soon)
+## Main Pipeline (5-Stage Regime-Aware Similarity)
 
-Similarity search, covariance forecasting, and backtesting will live under `pipeline/`.
+The regime-aware similarity forecasting engine lives under `similarity_forecast/`.
+
+This module implements a **5-stage regime-aware similarity framework** for volatility, covariance, and correlation forecasting.
+
+```bash
+python run_regime_similarity.py
+```
+
+For each anchor time $t$:
+
+### Stage 1 — Window Embedding
+
+We construct a rolling lookback window of returns:
+
+$$
+X_t = R_{t-L+1:t}
+$$
+
+and compute an embedding:
+
+$$
+z_t = f(X_t)
+$$
+
+Embeddings are implemented in:
+
+```
+similarity_forecast/embeddings.py
+```
+
+Examples:
+
+* `CorrEigenEmbedder`
+* `VolStatsEmbedder`
+
+
+### Stage 2 — Regime Inference (GMM)
+
+We fit a Gaussian Mixture Model (GMM) on the embedding space:
+
+$$
+\pi_t(k) = P(s_t = k \mid z_t)
+$$
+
+This produces **soft regime probabilities**.
+
+Implemented in:
+
+```
+similarity_forecast/regimes.py
+```
+
+
+### Stage 3 — Transition Estimation & Filtering
+
+We estimate a regime transition matrix:
+
+$$
+A_{ij} = P(s_t = j \mid s_{t-1} = i)
+$$
+
+Then compute filtered regime posteriors:
+
+$$
+\alpha_t \propto (\alpha_{t-1} A) \odot \pi_t
+$$
+
+where $\odot$ denotes elementwise multiplication.
+
+After normalization:
+
+$$
+\alpha_t = \frac{(\alpha_{t-1} A) \odot \pi_t}
+{\sum_k \left[(\alpha_{t-1} A) \odot \pi_t \right]_k}
+$$
+
+This smooths regime probabilities over time.
+
+Implemented in:
+
+```
+similarity_forecast/regimes.py
+```
+
+### Stage 4 — Similarity Retrieval
+
+For anchor embedding $z_t$, retrieve nearest neighbors:
+
+$$
+\mathcal{N}(t) = { t_i }
+$$
+
+using Euclidean distance in embedding space:
+
+$$
+d_i = | z_t - z_{t_i} |_2
+$$
+
+Similarity kernel:
+
+$$
+\kappa_i = \exp\left(-\frac{d_i}{\tau}\right)
+$$
+
+Implemented in:
+
+```
+similarity_forecast/core.py
+similarity_forecast/pipeline_regime.py
+```
+
+### Stage 5 — Regime-Aware KNN Aggregation
+
+For each regime $k$, compute regime-conditioned weights:
+
+$$
+w_i^{(k)} \propto \kappa_i , \pi_{t_i}(k)
+$$
+
+Normalized over neighbors:
+
+$$
+w_i^{(k)} =
+\frac{\kappa_i , \pi_{t_i}(k)}
+{\sum_j \kappa_j , \pi_{t_j}(k)}
+$$
+
+Regime-conditional forecasts:
+
+$$
+\hat{y}^{(k)} =
+\sum_{i \in \mathcal{N}(t)}
+w_i^{(k)} , y_{t_i}
+$$
+
+Final mixture forecast:
+
+$$
+\hat{y}*t =
+\sum*{k=1}^{K}
+\alpha_t(k) , \hat{y}^{(k)}
+$$
+
+Aggregation supports:
+
+* Euclidean mean
+* Log-Euclidean SPD mean (for covariance matrices)
+
+Implemented in:
+
+```
+similarity_forecast/regime_weighting.py
+similarity_forecast/core.py
+similarity_forecast/pipeline_regime.py
+```
+
+### Outputs
+
+For each anchor time $t$, the model produces:
+
+* Regime-aware forecast object (covariance, correlation, or volatility)
+* Filtered regime posterior $\alpha_t$
+* Optional diagnostics:
+
+  * Neighbor indices
+  * Similarity weights $\kappa_i$
+  * Regime-conditioned forecasts $\hat{y}^{(k)}$
+  * Neighbor regime probabilities $\pi_{t_i}(k)$
+
+### Architecture Overview
+```
+similarity_forecast/
+│
+├── core.py
+├── embeddings.py
+├── target_objects.py
+├── regimes.py
+├── regime_weighting.py
+├── pipeline_regime.py
+└── __init__.py
+```
+
+Stage 6 (transition-ahead regime forecasting) can be added on top of this foundation.
+
 
 ## Key Results (EDA Phase)
 
