@@ -1,110 +1,90 @@
-# Similarity-Based Forecasting Pipeline
+# Similarity-Based Covariance Forecasting for US Equities
 
-This module implements a **similarity-based forecasting framework** for financial time series, designed to be **modular, extensible, and free of lookahead bias**.
+## Project Overview
 
-The core idea is to:
+This project implements similarity-based covariance forecasting for US equities using daily/minutely return data. We build a clean universe of high-quality stocks, extract returns, and (in the pipeline phase) apply SPD geometry, regime detection, and GMVP backtesting against baselines (HAR, DCC-GARCH, Ledoit-Wolf).
 
-* compute **similarity across historical market states** using embeddings of raw return windows, and
-* forecast **future risk objects** (e.g. volatility, correlation, covariance) by aggregating outcomes from similar past states.
+## Team
 
-Crucially, **the similarity representation is decoupled from the forecast target**, allowing rich feature engineering without constraining what is being forecast.
+- Devansh Mishra
+- Zhiyi Chen
 
----
-
-### High-level workflow
-
-For each anchor time ( t ):
-
-1. **Raw input window**
-
-   * Past returns:
-<b>X<sub>t</sub> = R<sub>t−L+1:t</sub> ∈ ℝ<sup>L×N</sup></b>
-
-2. **Embedding (feature engineering)**
-
-   * A `WindowEmbedder` maps the raw window to a fixed-dimensional vector:
-**e**<sub>t</sub> = *f*(**X**<sub>t</sub>) ∈ ℝ<sup>D</sup>
-
-   * All feature engineering (e.g. correlation structure, volatility statistics, eigen-spectra) lives **inside the embedder**.
-
-3. **Similarity search**
-
-   * Nearest neighbors are retrieved via KNN in embedding space across historical windows.
-
-4. **Target construction**
-
-   * A `TargetObject` computes the forecast target using *future* returns only:
-**Y**<sub>t</sub> = *g*(**R**<sub>t+1:t+H</sub>)
-
-   * Targets may be volatility vectors, correlation matrices, covariance matrices, etc.
-
-5. **Aggregation**
-
-   * Neighbor targets are combined using distance-based weights and a target-aware aggregator (e.g. Euclidean mean, log-Euclidean SPD mean).
-
----
-
-### Key design principles
-
-* **State ≠ Target**
-  The similarity representation does *not* need to match the forecast object.
-
-  * Example: similarity on correlation eigenstructure, forecast future volatility.
-  * Example: similarity on vol + tail features, forecast correlation.
-
-* **Feature engineering is embedder-driven**
-  The pipeline operates directly on raw return windows; all transformations into features or regimes occur inside embedders.
-
-* **Fixed-dimensional similarity space**
-  Each time window maps to a fixed (D)-dimensional embedding, enabling efficient KNN search even with a changing asset universe.
-
-* **Lookahead-safe by construction**
-
-  * Similarity uses only past data (t-L+1, t)
-  * Targets use only future data (t+1, t+H)
-  * Asset filtering and NA handling are performed as-of the lookback window
-
----
-
-### Module overview
+## Project Structure
 
 ```
-similarity_forecast/
-├── embeddings.py        # Window → embedding (feature engineering)
-├── similarity.py        # KNN and optional two-stage similarity search
-├── target_objects.py    # Forecast targets (vol, corr, cov, etc.)
-├── aggregation.py       # Weighting + aggregation rules
-├── pipeline.py          # End-to-end orchestration
-├── config.py            # Configuration helpers
-└── utils.py             # Shared numerical utilities
+26W_M279/
+├── data/               # Dataset storage (raw, processed, universes)
+├── scripts/            # Data processing scripts
+│   ├── data_extraction/
+│   └── universe_selection/
+├── notebooks/          # Jupyter notebooks for EDA
+├── results/            # Analysis outputs (figures, reports)
+├── archive/            # Old attempts (gitignored)
+└── pipeline/           # Main forecasting pipeline (coming soon)
 ```
+
+## Data
+
+- **Source**: NYSE + NASDAQ daily returns (2007–2021); minutely data from archives for quality filtering.
+- **Universe**: 100 stocks including major tech, financials, healthcare.
+- **Availability**: ~98.5% mean data coverage for the final universe.
+
+### Data Files
+
+- `data/processed/returns_universe_100.parquet`: Final 100-stock returns matrix (gitignored; large).
+- `data/processed/minutely_daily_returns.parquet`: Daily returns from minutely data (515 stocks; gitignored).
+- `data/universes/FINAL_UNIVERSE_100_FINAL.csv`: List of selected 100 tickers (tracked).
+- `data/universes/FINAL_UNIVERSE_metadata.txt`: Selection criteria and stats (tracked).
+
+## Setup
+
+1. Clone the repository.
+2. Install dependencies: `pip install -r requirements.txt`
+3. Data files are gitignored due to size. Contact the team for access (e.g. Dropbox or shared drive).
+
+## Usage
+
+### Data Processing (already run)
+
+```bash
+# Build pvCLCL matrix from raw CSVs (data-dir = data/raw or unzipped source)
+python scripts/data_extraction/build_pvclcl_matrix.py --data-dir data/raw --out-parquet data/processed/pvCLCL_matrix.parquet
+
+# Extract daily returns from minutely .7z archives (writes to results/eda/reports)
+python scripts/data_extraction/minutely_extraction_pipeline.py
+
+# Select final universe (reads quality from results/eda/reports, writes to data/universes/)
+python scripts/universe_selection/select_final_universe.py
+```
+
+### EDA
+
+```bash
+jupyter notebook notebooks/data_prep_eda.ipynb
+```
+
+### Main Pipeline (coming soon)
+
+Similarity search, covariance forecasting, and backtesting will live under `pipeline/`.
+
+## Key Results (EDA Phase)
+
+- Extracted 515 stocks from minutely data.
+- Selected 100 high-quality stocks (~98.5% availability).
+- Includes 18 mega-caps: AAPL, MSFT, GOOGL, AMZN, NVDA, META/FB, NFLX, JPM, BAC, WFC, JNJ, PFE, UNH, WMT, HD, V, MA, NKE.
+
+## Next Steps
+
+1. Implement similarity-based forecasting pipeline.
+2. SPD geometry (log-Euclidean representations).
+3. Regime detection.
+4. GMVP backtesting.
+5. Comparison vs baselines (HAR, DCC-GARCH, Ledoit-Wolf).
+
+## References
+
+[Add key papers from your proposal.]
 
 ---
 
-### Example usage
-
-```python
-model = SimilarityForecaster(
-    embedder=CorrEigenEmbedder(k=20),     # similarity on correlation structure
-    target_object=VolTarget(log=True),    # forecast future volatility
-    weighting=RBFWeighting(tau=5.0),
-    aggregator=EuclideanMean(),
-    lookback=60,
-    horizon=20,
-)
-
-model.fit(returns_df)
-y_hat = model.predict_at_anchor(anchor_pos=1000, k=50)
-```
-
----
-
-### Extensibility
-
-This design naturally supports:
-
-* composite embeddings (concatenated feature blocks)
-* regime-aware similarity (filter neighbors by regime labels)
-* approximate nearest neighbors (ANN) backends
-* factor-based or low-rank targets
-* asset-level or cross-sectional extensions
+Last updated: February 2026
