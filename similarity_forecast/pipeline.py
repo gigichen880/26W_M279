@@ -1,82 +1,202 @@
+# similarity_forecast/pipeline.py
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any
+
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
 from .embeddings import WindowEmbedder
-from .similarity import ExactKNN
-from .aggregation import Weighting, Aggregator
 from .target_objects import TargetObject
+from .core import ExactKNN, Weighting, Aggregator
+from .regimes import RegimeModel
+from .regime_weighting import RegimeAwareWeights
 
 
 @dataclass
-class SimilarityForecaster:
+class RegimeAwareSimilarityForecaster:
     """
-    Max-flex design:
-      - Similarity is computed from embeddings of RAW windows (feature engineering inside embedder)
-      - Forecast target is computed independently from future windows
+    Updated pipeline implementing 6-stage regime-aware similarity forecasting.
+    (For now: implements Stages 1–5, skipping Stage 6 transition-ahead mixing.)
+
+    Stages:
+      1) Build window embeddings z_t = f(X_t)
+      2) Fit GMM on embeddings -> soft regime membership PI[t,k]
+      3) Estimate transition A from hard assignments; filter alpha_t
+      4) Retrieve M nearest neighbors via similarity kernel kappa_i = exp(-||z0-zi||/tau)
+      5) Regime-aware KNN:
+            w_i^(k) ∝ kappa_i * PI[ti,k]
+            yhat^(k) = Σ_i w_i^(k) y_i
+            yhat      = Σ_k alpha_t(k) * yhat^(k)
+
+    Data alignment:
+      - We build samples for each anchor index i corresponding to the END of the past window.
+      - embeds_[i] and targets_[i] correspond to that anchor.
+      - All similarity search is done over these anchor-indexed samples.
     """
     embedder: WindowEmbedder
     target_object: TargetObject
-    weighting: Weighting
     aggregator: Aggregator
 
     lookback: int
     horizon: int
 
-    embeds_: Optional[NDArray[np.floating]] = None   # [T0, D]
-    targets_: Optional[NDArray[np.floating]] = None  # [T0, ...]
+    # regime model
+    regime_model: RegimeModel
+
+    # similarity kernel temperature
+    tau: float = 1.0
+    eps: float = 1e-12
+
+    # fitted
+    embeds_: Optional[NDArray[np.floating]] = None      # [T0, D]
+    targets_: Optional[NDArray[np.floating]] = None    # [T0, ...]
     knn_: Optional[ExactKNN] = None
 
-    def _build_windows(self, R: NDArray[np.floating]) -> List[Tuple[slice, slice]]:
+    PI_: Optional[NDArray[np.floating]] = None         # [T0, K]
+    ALPHA_: Optional[NDArray[np.floating]] = None      # [T0, K]
+    A_: Optional[NDArray[np.floating]] = None          # [K, K]
+
+    # for debugging / alignment
+    anchor_dates_: Optional[pd.DatetimeIndex] = None
+
+    def _build_windows(self, R: NDArray[np.floating]) -> List[Tuple[int, slice, slice]]:
+        """
+        Returns a list of (anchor_idx, past_slice, fut_slice)
+        anchor_idx is the index in R corresponding to the last row of past_slice.
+        """
         T = R.shape[0]
         L, H = self.lookback, self.horizon
-        pairs = []
-        for i in range(L - 1, T - H - 1):
-            past = slice(i - L + 1, i + 1)
-            fut = slice(i + 1, i + H + 1)
-            pairs.append((past, fut))
-        return pairs
+        out: List[Tuple[int, slice, slice]] = []
+        for anchor in range(L - 1, T - H - 1):
+            past = slice(anchor - L + 1, anchor + 1)
+            fut = slice(anchor + 1, anchor + H + 1)
+            out.append((anchor, past, fut))
+        return out
 
-    def fit(self, returns_df: pd.DataFrame) -> "SimilarityForecaster":
+    def _check_fitted(self) -> None:
+        if (
+            self.embeds_ is None
+            or self.targets_ is None
+            or self.knn_ is None
+            or self.PI_ is None
+            or self.ALPHA_ is None
+            or self.A_ is None
+        ):
+            raise RuntimeError("Call fit() first.")
+
+    def fit(self, returns_df: pd.DataFrame) -> "RegimeAwareSimilarityForecaster":
+        """
+        Fit Stages 1–3 on the full sample set (you can later wrap this in walk-forward).
+        """
         R = returns_df.to_numpy(dtype=float)  # [T, N]
-        pairs = self._build_windows(R)
-        if not pairs:
+        windows = self._build_windows(R)
+        if not windows:
             raise ValueError("Not enough rows for lookback/horizon.")
 
         embeds = []
         targets = []
+        anchor_pos = []
+        for anchor, past_sl, fut_sl in windows:
+            past = R[past_sl]
+            fut = R[fut_sl]
 
-        for past_sl, fut_sl in pairs:
-            past = R[past_sl]     # [L, N]
-            fut = R[fut_sl]       # [H, N]
-
-            e = self.embedder.embed(past)              # [D]
-            y = self.target_object.target(fut)         # target object (vector or matrix)
+            e = self.embedder.embed(past)          # [D]
+            y = self.target_object.target(fut)     # [...]
 
             embeds.append(e)
             targets.append(y)
+            anchor_pos.append(anchor)
 
-        self.embeds_ = np.stack(embeds, axis=0)
-        self.targets_ = np.stack(targets, axis=0)
+        self.embeds_ = np.stack(embeds, axis=0).astype(float)   # [T0, D]
+        self.targets_ = np.stack(targets, axis=0).astype(float) # [T0, ...]
         self.knn_ = ExactKNN(self.embeds_)
+
+        # anchor dates for debugging
+        if isinstance(returns_df.index, pd.DatetimeIndex):
+            self.anchor_dates_ = returns_df.index[np.array(anchor_pos, dtype=int)]
+        else:
+            self.anchor_dates_ = None
+
+        # Stage 2: GMM -> PI
+        self.regime_model.fit_gmm(self.embeds_)
+        self.PI_ = self.regime_model.predict_pi(self.embeds_)  # [T0, K]
+
+        # Stage 3: estimate transition + filter alpha
+        self.A_ = self.regime_model.estimate_transition(self.PI_)
+        self.ALPHA_ = self.regime_model.filter_alpha(self.PI_, A=self.A_)
+
         return self
 
-    def _check_fitted(self) -> None:
-        if self.embeds_ is None or self.targets_ is None or self.knn_ is None:
-            raise RuntimeError("Call fit() first.")
+    def _kappa_from_dist(self, dist: NDArray[np.floating]) -> NDArray[np.floating]:
+        """
+        Stage 4 kernel: kappa_i = exp(-||z0-zi|| / tau)
+        (note: your previous RBFWeighting used exp(-d^2/tau); this uses exp(-d/tau) per spec)
+        """
+        tau = max(self.tau, self.eps)
+        kappa = np.exp(-dist / tau)
+        return kappa.astype(float)
 
-    def predict_at_anchor(self, anchor_pos: int, k: int = 50, exclude_self: bool = True) -> NDArray[np.floating]:
+    def predict_at_anchor(
+        self,
+        anchor_pos: int,
+        k: int = 50,
+        exclude_self: bool = True,
+        return_debug: bool = False,
+    ):
+        """
+        anchor_pos is index in the *sample space* (0..T0-1), not the raw returns row.
+
+        Returns:
+          yhat: final mixed forecast  (stage 5)
+          optionally debug dict
+        """
         self._check_fitted()
         assert self.embeds_ is not None and self.targets_ is not None and self.knn_ is not None
+        assert self.PI_ is not None and self.ALPHA_ is not None
 
-        e = self.embeds_[anchor_pos]
+        e0 = self.embeds_[anchor_pos]
         exclude = anchor_pos if exclude_self else None
-        idx, dist = self.knn_.query(e=e, k=k, exclude_index=exclude)
 
-        w = self.weighting.weights(dist)
-        y_hat = self.aggregator.aggregate(self.targets_[idx], w)
-        return self.target_object.postprocess(y_hat)
+        idx, dist = self.knn_.query(e=e0, k=min(k, self.embeds_.shape[0]), exclude_index=exclude)
+
+        # Stage 4: similarity kernel kappa
+        kappa = self._kappa_from_dist(dist)  # [M]
+        # normalize kappa globally for stability (optional)
+        kappa = kappa / max(kappa.sum(), self.eps)
+
+        # Stage 5: regime-aware neighbor weights
+        PI_nbr = self.PI_[idx]  # [M, K]
+        W = RegimeAwareWeights(eps=self.eps).compute(kappa=kappa, PI_neighbors=PI_nbr)  # [K, M]
+
+        K = W.shape[0]
+        # regime-conditional forecasts yhat^(k)
+        yk_list = []
+        for kk in range(K):
+            w = W[kk]  # [M]
+            yk = self.aggregator.aggregate(self.targets_[idx], w)  # [...]
+            yk_list.append(yk)
+        YK = np.stack(yk_list, axis=0)  # [K, ...]
+
+        alpha = self.ALPHA_[anchor_pos]  # [K]
+        # final mix over regimes
+        yhat = np.tensordot(alpha, YK, axes=(0, 0))  # [...]
+
+        yhat = self.target_object.postprocess(yhat)
+
+        if not return_debug:
+            return yhat
+
+        dbg: Dict[str, Any] = {
+            "neighbor_idx": idx,
+            "neighbor_dist": dist,
+            "kappa": kappa,
+            "PI_neighbors": PI_nbr,
+            "alpha": alpha,
+            "YK": YK,
+        }
+        if self.anchor_dates_ is not None:
+            dbg["anchor_date"] = self.anchor_dates_[anchor_pos]
+        return yhat, dbg

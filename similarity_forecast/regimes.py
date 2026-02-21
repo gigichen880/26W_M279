@@ -1,0 +1,134 @@
+# similarity_forecast/regimes.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional, Tuple
+import numpy as np
+from numpy.typing import NDArray
+
+
+def _row_normalize(A: NDArray[np.floating], eps: float = 1e-12) -> NDArray[np.floating]:
+    s = A.sum(axis=1, keepdims=True)
+    return A / np.maximum(s, eps)
+
+
+@dataclass
+class RegimeModel:
+    """
+    Stage 2 + Stage 3 (V1 smoothing) for the 6-stage regime-aware similarity pipeline.
+
+    Stage 2:
+      - Fit a GMM on embeddings Z to get soft membership pi_t(k)
+
+    Stage 3:
+      - Estimate transition matrix A from hard assignments (argmax pi)
+      - Compute filtered posterior alpha_t via:
+            alpha_t ∝ (alpha_{t-1} A) ⊙ pi_t
+        normalized.
+
+    Notes:
+      - This module is deliberately sklearn-optional.
+      - If sklearn is available, we use sklearn.mixture.GaussianMixture.
+      - Otherwise, you can pass in precomputed PI externally.
+    """
+    n_regimes: int
+    covariance_type: str = "full"
+    reg_covar: float = 1e-6
+    random_state: int = 0
+    max_iter: int = 300
+    tol: float = 1e-3
+
+    trans_smooth: float = 1.0  # Laplace smoothing for A counts
+    eps: float = 1e-12
+
+    gmm_: Optional[object] = None
+    A_: Optional[NDArray[np.floating]] = None
+
+    def fit_gmm(self, Z: NDArray[np.floating]) -> "RegimeModel":
+        try:
+            from sklearn.mixture import GaussianMixture  # type: ignore
+        except Exception as e:
+            raise ImportError(
+                "scikit-learn is required for RegimeModel.fit_gmm(). "
+                "Install with: pip install scikit-learn"
+            ) from e
+
+        gmm = GaussianMixture(
+            n_components=self.n_regimes,
+            covariance_type=self.covariance_type,
+            reg_covar=self.reg_covar,
+            random_state=self.random_state,
+            max_iter=self.max_iter,
+            tol=self.tol,
+        )
+        gmm.fit(Z)
+        self.gmm_ = gmm
+        return self
+
+    def predict_pi(self, Z: NDArray[np.floating]) -> NDArray[np.floating]:
+        if self.gmm_ is None:
+            raise RuntimeError("Call fit_gmm() first (or supply PI externally).")
+        PI = self.gmm_.predict_proba(Z)
+        # ensure numeric stability
+        PI = np.maximum(PI, self.eps)
+        PI = PI / np.maximum(PI.sum(axis=1, keepdims=True), self.eps)
+        return PI.astype(float)
+
+    def estimate_transition(self, PI: NDArray[np.floating]) -> NDArray[np.floating]:
+        """
+        Estimate A from hard assignments s_t = argmax_k PI[t,k].
+        Uses Laplace smoothing with trans_smooth.
+        """
+        s = np.argmax(PI, axis=1).astype(int)
+        K = self.n_regimes
+        counts = np.full((K, K), float(self.trans_smooth), dtype=float)
+
+        for t in range(1, s.shape[0]):
+            counts[s[t - 1], s[t]] += 1.0
+
+        A = _row_normalize(counts, eps=self.eps)
+        self.A_ = A
+        return A
+
+    def filter_alpha(
+        self,
+        PI: NDArray[np.floating],
+        A: Optional[NDArray[np.floating]] = None,
+        alpha0: Optional[NDArray[np.floating]] = None,
+    ) -> NDArray[np.floating]:
+        """
+        Compute filtered posterior alpha_t over time:
+            alpha_t ∝ (alpha_{t-1} A) ⊙ PI[t]
+        Returns ALPHA: [T, K]
+        """
+        if A is None:
+            if self.A_ is None:
+                raise RuntimeError("Need transition matrix A. Call estimate_transition() first.")
+            A = self.A_
+
+        T, K = PI.shape
+        if K != self.n_regimes:
+            raise ValueError(f"PI has K={K}, but RegimeModel.n_regimes={self.n_regimes}")
+
+        ALPHA = np.zeros((T, K), dtype=float)
+
+        if alpha0 is None:
+            a = PI[0].copy()
+        else:
+            a = np.maximum(alpha0, self.eps)
+            a = a / np.maximum(a.sum(), self.eps)
+
+        ALPHA[0] = a
+
+        for t in range(1, T):
+            pred = a @ A  # [K]
+            post = pred * PI[t]
+            s = post.sum()
+            if s <= self.eps:
+                # degenerate fallback: use PI[t]
+                a = PI[t].copy()
+            else:
+                a = post / s
+            ALPHA[t] = a
+
+        return ALPHA

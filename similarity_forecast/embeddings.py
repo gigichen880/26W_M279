@@ -5,7 +5,7 @@ from typing import Protocol, Optional
 import numpy as np
 from numpy.typing import NDArray
 
-from .utils import cov_from_returns, corr_from_cov
+from .core import cov_from_returns, corr_from_cov
 
 
 class WindowEmbedder(Protocol):
