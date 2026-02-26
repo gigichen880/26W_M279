@@ -3,12 +3,12 @@ import pandas as pd
 
 from similarity_forecast.embeddings import CorrEigenEmbedder
 from similarity_forecast.target_objects import CovarianceTarget
-from similarity_forecast.aggregation import LogEuclideanSPDMean
+from similarity_forecast.core import LogEuclideanSPDMean
 from similarity_forecast.regimes import RegimeModel
 from similarity_forecast.pipeline import RegimeAwareSimilarityForecaster
 
-# returns_df: index=dates, columns=tickers, values=daily returns
-returns_df = pd.read_parquet("returns.parquet")  # TODO: replace with data path
+# returns_df: index=dates, columns=tickers, values=daily returns (3655 x 100)
+returns_df = pd.read_parquet("data/processed/returns_universe_100.parquet")
 
 embedder = CorrEigenEmbedder(k=32)
 target = CovarianceTarget(ddof=1)
