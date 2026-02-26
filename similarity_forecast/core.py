@@ -1,9 +1,11 @@
 # similarity_forecast/core.py
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Protocol, Optional, Tuple
 import numpy as np
+import pandas as pd
 from numpy.typing import NDArray
 
 
@@ -44,20 +46,83 @@ def expm_sym(A: NDArray[np.floating]) -> NDArray[np.floating]:
     return (V * np.exp(w)) @ V.T
 
 
-def cov_from_returns(R: NDArray[np.floating], ddof: int = 1) -> NDArray[np.floating]:
+def cov_from_returns(
+    R: NDArray[np.floating],
+    ddof: int = 1,
+    min_periods: Optional[int] = None,
+) -> NDArray[np.floating]:
     """
-    R: [L, N] returns
-    returns: [N, N] sample covariance
+    Compute covariance from returns matrix, handling NAs gracefully.
+
+    Args:
+        R: (T, N) array of returns (can contain NaNs)
+        ddof: delta degrees of freedom (default 1)
+        min_periods: minimum number of overlapping observations required
+            (default: max(2, T//2), i.e. need 50% overlap when NAs present)
+
+    Returns:
+        (N, N) covariance matrix (projected to SPD)
     """
-    X = R - R.mean(axis=0, keepdims=True)
-    denom = max(1, (X.shape[0] - ddof))
-    return (X.T @ X) / denom
+    T, N = R.shape
+    if min_periods is None:
+        min_periods = max(2, T // 2)
+
+    has_na = np.isnan(R).any()
+    if not has_na:
+        # No NAs: simple path
+        X = R - np.nanmean(R, axis=0, keepdims=True)
+        denom = max(1, T - ddof)
+        cov_matrix = (X.T @ X) / denom
+    else:
+        df = pd.DataFrame(R)
+        cov_matrix = df.cov(min_periods=min_periods, ddof=ddof).values
+
+    if np.isnan(cov_matrix).any():
+        n_valid = int((~np.isnan(cov_matrix)).sum())
+        warnings.warn(
+            f"Covariance has NaNs. Only {n_valid} / {N * N} entries valid. "
+            "Consider increasing min_periods or filtering stocks.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    cov_matrix = project_to_spd(np.nan_to_num(cov_matrix, nan=0.0, posinf=0.0, neginf=0.0))
+    return cov_matrix.astype(float)
 
 
 def corr_from_cov(Sigma: NDArray[np.floating], eps: float = 1e-12) -> NDArray[np.floating]:
     d = np.sqrt(np.maximum(np.diag(Sigma), eps))
     invd = 1.0 / d
     return (Sigma * invd[None, :]) * invd[:, None]
+
+
+def validate_window(
+    returns_window: NDArray[np.floating],
+    max_na_pct: float = 0.3,
+    min_stocks_pct: float = 0.8,
+) -> bool:
+    """
+    Check if a returns window has sufficient data quality.
+
+    Args:
+        returns_window: (T, N) returns for this window
+        max_na_pct: maximum allowed fraction of NAs (default 0.3)
+        min_stocks_pct: minimum fraction of stocks that must have data (default 0.8)
+
+    Returns:
+        True if window is valid, False otherwise
+    """
+    T, N = returns_window.shape
+    na_pct = np.isnan(returns_window).sum() / (T * N)
+    if na_pct > max_na_pct:
+        return False
+    stocks_with_data = (~np.isnan(returns_window).all(axis=0)).sum()
+    if stocks_with_data / N < min_stocks_pct:
+        return False
+    times_with_data = (~np.isnan(returns_window).all(axis=1)).sum()
+    if times_with_data / T < 0.5:
+        return False
+    return True
 
 
 # =========================

@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 
 from .embeddings import WindowEmbedder
 from .target_objects import TargetObject
-from .core import ExactKNN, Weighting, Aggregator
+from .core import ExactKNN, Weighting, Aggregator, validate_window
 from .regimes import RegimeModel
 from .regime_weighting import RegimeAwareWeights
 
@@ -49,6 +49,11 @@ class RegimeAwareSimilarityForecaster:
     # similarity kernel temperature
     tau: float = 1.0
     eps: float = 1e-12
+
+    # NA handling: skip windows that fail validation
+    max_window_na_pct: float = 0.3
+    min_stocks_with_data_pct: float = 0.8
+    verbose_skip: bool = False
 
     # fitted
     embeds_: Optional[NDArray[np.floating]] = None      # [T0, D]
@@ -99,9 +104,20 @@ class RegimeAwareSimilarityForecaster:
         embeds = []
         targets = []
         anchor_pos = []
+        skipped = 0
         for anchor, past_sl, fut_sl in windows:
             past = R[past_sl]
             fut = R[fut_sl]
+
+            if not validate_window(
+                past,
+                max_na_pct=self.max_window_na_pct,
+                min_stocks_pct=self.min_stocks_with_data_pct,
+            ):
+                skipped += 1
+                if self.verbose_skip:
+                    print(f"Skipping window at t={anchor}: insufficient data quality")
+                continue
 
             e = self.embedder.embed(past)          # [D]
             y = self.target_object.target(fut)     # [...]
@@ -109,6 +125,14 @@ class RegimeAwareSimilarityForecaster:
             embeds.append(e)
             targets.append(y)
             anchor_pos.append(anchor)
+
+        if not embeds:
+            raise ValueError(
+                "No valid windows after NA validation. Try relaxing max_window_na_pct "
+                "or min_stocks_with_data_pct."
+            )
+        if skipped and self.verbose_skip:
+            print(f"Skipped {skipped} / {len(windows)} windows due to data quality.")
 
         self.embeds_ = np.stack(embeds, axis=0).astype(float)   # [T0, D]
         self.targets_ = np.stack(targets, axis=0).astype(float) # [T0, ...]

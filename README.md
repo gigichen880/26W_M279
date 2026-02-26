@@ -250,6 +250,57 @@ similarity_forecast/
 Stage 6 (transition-ahead regime forecasting) can be added on top of this foundation.
 
 
+## Handling Missing Data
+
+The pipeline handles NAs (missing returns) at several stages:
+
+### 1. Data filtering (optional)
+
+- Optionally filter out stocks with >30% missing data before fitting.
+- Toggle in `run_regime_similarity.py` via `FILTER_HIGH_NA_STOCKS`, or use `SimilarityConfig.filter_high_na_stocks` and `high_na_threshold`.
+
+### 2. Window validation
+
+- Windows with >30% NAs are skipped (configurable: `max_window_na_pct`).
+- At least 80% of stocks must have some data in the window (`min_stocks_with_data_pct`).
+- Reduces unstable covariance and embedding estimates.
+
+### 3. Covariance computation
+
+- Uses pairwise-complete observations (pandas-style).
+- Requires a minimum overlap between pairs (default 50% of window length).
+- Result is projected onto the SPD manifold.
+
+### 4. Embeddings
+
+- Correlation eigenvalue embedder uses NA-safe covariance; falls back to complete-case or zero embedding when needed.
+- Vol embedder uses `nanstd` / `nanmean` over the window.
+
+### Configuration
+
+```python
+from similarity_forecast.config import SimilarityConfig
+
+config = SimilarityConfig(
+    max_window_na_pct=0.3,           # Skip windows with >30% NAs
+    min_stocks_with_data_pct=0.8,   # Need 80% of stocks with data
+    filter_high_na_stocks=True,      # Remove high-NA stocks upfront (if used)
+    high_na_threshold=0.3,
+)
+```
+
+Pipeline parameters (e.g. on `RegimeAwareSimilarityForecaster`): `max_window_na_pct`, `min_stocks_with_data_pct`, `verbose_skip`.
+
+### Why not impute?
+
+For returns we avoid imputation (forward-fill, mean, zero) because:
+
+- Forward-fill can introduce look-ahead bias.
+- Mean/zero imputation distorts volatilities and correlations.
+
+We use pairwise-complete observations and window validation instead, which is standard for real financial data.
+
+
 ## Key Results (EDA Phase)
 
 - Extracted 515 stocks from minutely data.

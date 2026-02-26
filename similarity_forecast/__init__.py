@@ -25,6 +25,7 @@ from .core import (
     expm_sym,
     cov_from_returns,
     corr_from_cov,
+    validate_window,
 
     # knn
     ExactKNN,
@@ -88,6 +89,8 @@ try:
 except Exception:
     SimilarityForecaster = None
 
+# Data validation
+from .data_validation import data_quality_report, print_data_quality_report
 
 __all__ = [
     # core
@@ -96,6 +99,7 @@ __all__ = [
     "expm_sym",
     "cov_from_returns",
     "corr_from_cov",
+    "validate_window",
     "ExactKNN",
     "Weighting",
     "RBFWeighting",
@@ -123,4 +127,6 @@ __all__ = [
     # pipelines
     "RegimeAwareSimilarityForecaster",
     "SimilarityForecaster",
+    "data_quality_report",
+    "print_data_quality_report",
 ]
