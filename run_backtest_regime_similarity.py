@@ -29,7 +29,6 @@ from similarity_forecast.pipeline import RegimeAwareSimilarityForecaster
 from similarity_forecast.regime_weighting import RegimeAwareWeights
 import dataclasses
 from numpy.typing import NDArray
-from scripts.clean_data import clean_returns_matrix_at_load
 
 def debug_R_at(R, t, date=None, tag=""):
     x = R[t, :]
@@ -338,7 +337,8 @@ def run_backtest(
     out = pd.DataFrame(rows).set_index("date").sort_index()
     return out
 
-if __name__ == "__main__":
+
+def main():
     returns_df = clean_returns_matrix_at_load(
         parquet_path="data/processed/returns_universe_100.parquet",
         policy="drop_date",          # safest first pass
@@ -354,19 +354,44 @@ if __name__ == "__main__":
         lookback=60,
         horizon=30,
         start_date="2018-01-01",
-        end_date="2020-05-31", 
+        end_date="2020-05-31",
         k_neighbors=50,
         refit_every=20,
         long_only=False,
         verbose=True,
     )
 
-    print("\n===== SUMMARY =====")
-    print(results[["fro", "kl", "pred_var", "real_var"]].describe())
+    # ----------------------------
+    # Summaries
+    # ----------------------------
+    headline_cols = [
+        "fro", "kl", "nll", "stein", "logeuc",
+        "corr_offdiag_fro", "corr_spearman",
+        "eig_log_mse", "cond_ratio",
+        "pred_var", "real_var",
+        "port_mse_var", "port_mse_logvar", "port_mae_logvar",
+        "turnover_l1", "w_hhi", "w_max_abs",
+    ]
+    headline_cols = [c for c in headline_cols if c in results.columns]
 
+    print("\n===== SUMMARY (headline metrics) =====")
+    print(results[headline_cols].describe())
+
+    # Optional: quick “worst offenders” to debug outliers
+    for key in ["kl", "nll", "logeuc", "corr_offdiag_fro", "port_mse_logvar", "turnover_l1"]:
+        if key in results.columns:
+            print(f"\n===== WORST 5 by {key} =====")
+            print(results[[key]].sort_values(key, ascending=False).head(5))
+
+    # ----------------------------
+    # Save
+    # ----------------------------
     os.makedirs("results", exist_ok=True)
     results.to_parquet("results/regime_similarity_backtest.parquet")
     results.to_csv("results/regime_similarity_backtest.csv")
     print("\nSaved:")
     print("  results/regime_similarity_backtest.parquet")
     print("  results/regime_similarity_backtest.csv")
+
+if __name__ == "__main__":
+    main()

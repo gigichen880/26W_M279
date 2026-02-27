@@ -1,200 +1,222 @@
-# scripts/plot_backtest_results.py
+# scripts/viz_backtest_results.py
+# Visualize results/regime_similarity_backtest.csv
+#
+# Usage:
+#   python scripts/viz_backtest_results.py \
+#       --csv results/regime_similarity_backtest.csv \
+#       --outdir results/figs_regime_similarity \
+#       --start 2018-01-01 --end 2020-05-31
+#
+# Notes:
+# - Uses matplotlib only (no seaborn).
+# - Produces time-series, rolling summaries, distributions, and key scatter plots.
+
 from __future__ import annotations
 
 import os
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 
-def load_results(csv_path: str) -> pd.DataFrame:
-    df = pd.read_csv(csv_path, parse_dates=["date"])
-    df = df.sort_values("date").set_index("date")
-    required = {"raw_anchor", "fro", "kl", "pred_var", "real_var"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
+def _read_results(csv_path: str) -> pd.DataFrame:
+    df = pd.read_csv(csv_path)
+    if "date" not in df.columns:
+        raise ValueError("CSV must contain a 'date' column.")
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date").sort_index()
     return df
 
 
-def safe_log10(x: pd.Series, eps: float = 1e-30) -> pd.Series:
-    return np.log10(np.maximum(x.astype(float).to_numpy(), eps))
+def _maybe_slice(df: pd.DataFrame, start: str | None, end: str | None) -> pd.DataFrame:
+    out = df
+    if start:
+        out = out.loc[pd.to_datetime(start) :]
+    if end:
+        out = out.loc[: pd.to_datetime(end)]
+    return out
 
 
-def rolling_mean(s: pd.Series, w: int) -> pd.Series:
-    return s.rolling(w, min_periods=max(5, w // 5)).mean()
+def _ensure_dir(outdir: str) -> None:
+    os.makedirs(outdir, exist_ok=True)
 
 
-def plot_time_series(df: pd.DataFrame, outdir: str, roll: int = 20) -> None:
-    # Frobenius
-    plt.figure(figsize=(11, 4))
-    plt.plot(df.index, df["fro"], linewidth=1)
-    plt.plot(df.index, rolling_mean(df["fro"], roll), linewidth=2)
-    plt.title(f"Frobenius Error Over Time (raw + {roll}d rolling mean)")
-    plt.xlabel("Date")
-    plt.ylabel("||Σ̂ − Σ||_F")
+def _savefig(path: str) -> None:
     plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "ts_fro.png"), dpi=150)
+    plt.savefig(path, dpi=200)
     plt.close()
 
-    # KL (log scale)
-    plt.figure(figsize=(11, 4))
-    plt.plot(df.index, df["kl"], linewidth=1)
-    plt.plot(df.index, rolling_mean(df["kl"], roll), linewidth=2)
-    plt.yscale("log")
-    plt.title(f"Gaussian KL Over Time (log y, raw + {roll}d rolling mean)")
-    plt.xlabel("Date")
-    plt.ylabel("D_KL(Σ || Σ̂)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "ts_kl_log.png"), dpi=150)
-    plt.close()
 
-    # Pred vs Real variance (two scales can differ a lot, so log y)
-    plt.figure(figsize=(11, 4))
-    plt.plot(df.index, df["pred_var"], linewidth=1, label="pred_var")
-    plt.plot(df.index, df["real_var"], linewidth=1, label="real_var")
-    plt.yscale("log")
-    plt.title("Min-Var Portfolio Variance: Predicted vs Realized (log y)")
-    plt.xlabel("Date")
-    plt.ylabel("Variance (log)")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "ts_pred_vs_real_var_log.png"), dpi=150)
-    plt.close()
+def plot_timeseries(df: pd.DataFrame, outdir: str) -> None:
+    # Prefer log scale for heavy-tailed metrics
+    panels = [
+        ("fro", "Frobenius error"),
+        ("kl", "KL divergence"),
+        ("nll", "Gaussian NLL (avg over H days)"),
+        ("logeuc", "Log-Euclidean distance"),
+        ("corr_spearman", "Corr upper-tri Spearman"),
+        ("corr_offdiag_fro", "Corr off-diagonal Fro"),
+        ("cond_ratio", "Condition number ratio (hat/true)"),
+        ("turnover_l1", "Min-var turnover L1"),
+        ("port_mse_logvar", "Multi-port MSE log(var)"),
+    ]
+    panels = [(c, t) for (c, t) in panels if c in df.columns]
 
-    # Real/Pred ratio
-    ratio = df["real_var"] / df["pred_var"].replace(0.0, np.nan)
-    plt.figure(figsize=(11, 4))
-    plt.plot(df.index, ratio, linewidth=1)
-    plt.plot(df.index, rolling_mean(ratio, roll), linewidth=2)
-    plt.yscale("log")
-    plt.title(f"Variance Calibration: real_var / pred_var (log y, + {roll}d roll)")
-    plt.xlabel("Date")
-    plt.ylabel("real / pred (log)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "ts_real_over_pred_log.png"), dpi=150)
-    plt.close()
+    if not panels:
+        print("[warn] No known metric columns found for time series plot.")
+        return
+
+    n = len(panels)
+    fig = plt.figure(figsize=(12, 2.2 * n))
+    for i, (col, title) in enumerate(panels, start=1):
+        ax = fig.add_subplot(n, 1, i)
+        s = df[col].astype(float)
+
+        ax.plot(s.index, s.values)
+        ax.set_title(title)
+
+        # Heavy-tailed: show log10 where appropriate (only if positive)
+        if col in {"kl", "nll", "corr_offdiag_fro", "logeuc", "port_mse_logvar"}:
+            if np.all(np.isfinite(s.values)) and np.nanmin(s.values) > 0:
+                ax.set_yscale("log")
+
+        ax.grid(True, alpha=0.3)
+    _savefig(os.path.join(outdir, "timeseries_metrics.png"))
+
+
+def plot_rolling(df: pd.DataFrame, outdir: str, window: int = 21) -> None:
+    cols = [c for c in ["fro", "kl", "nll", "logeuc", "corr_spearman", "turnover_l1"] if c in df.columns]
+    if not cols:
+        return
+
+    roll = df[cols].rolling(window, min_periods=max(5, window // 3)).median()
+
+    fig = plt.figure(figsize=(12, 2.2 * len(cols)))
+    for i, c in enumerate(cols, start=1):
+        ax = fig.add_subplot(len(cols), 1, i)
+        ax.plot(df.index, df[c].values, alpha=0.25, label=c)
+        ax.plot(roll.index, roll[c].values, linewidth=2.0, label=f"{window}d rolling median")
+        ax.set_title(f"{c}: raw + {window}d rolling median")
+        if c in {"kl", "nll", "logeuc"} and np.nanmin(df[c].values) > 0:
+            ax.set_yscale("log")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best")
+    _savefig(os.path.join(outdir, f"rolling_median_{window}d.png"))
 
 
 def plot_distributions(df: pd.DataFrame, outdir: str) -> None:
-    # Histograms (log-x for KL often helps)
-    plt.figure(figsize=(7, 4))
-    plt.hist(df["fro"].to_numpy(), bins=60)
-    plt.title("Distribution of Frobenius Error")
-    plt.xlabel("||Σ̂ − Σ||_F")
-    plt.ylabel("count")
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "hist_fro.png"), dpi=150)
-    plt.close()
+    cols = [c for c in ["fro", "kl", "nll", "logeuc", "corr_spearman", "turnover_l1", "w_hhi", "w_max_abs"] if c in df.columns]
+    if not cols:
+        return
 
-    plt.figure(figsize=(7, 4))
-    plt.hist(df["kl"].to_numpy(), bins=80)
-    plt.yscale("log")
-    plt.title("Distribution of KL (log count)")
-    plt.xlabel("KL")
-    plt.ylabel("count (log)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "hist_kl_logcount.png"), dpi=150)
-    plt.close()
+    n = len(cols)
+    fig = plt.figure(figsize=(12, 2.6 * n))
+    for i, c in enumerate(cols, start=1):
+        ax = fig.add_subplot(n, 1, i)
+        x = df[c].astype(float).replace([np.inf, -np.inf], np.nan).dropna().values
+        if x.size == 0:
+            ax.set_title(f"{c} (empty)")
+            continue
 
-    # log10 KL histogram (often more readable than raw KL)
-    plt.figure(figsize=(7, 4))
-    plt.hist(safe_log10(df["kl"]), bins=60)
-    plt.title("Distribution of log10(KL)")
-    plt.xlabel("log10(KL)")
-    plt.ylabel("count")
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "hist_log10_kl.png"), dpi=150)
-    plt.close()
+        ax.hist(x, bins=60, density=False)
+        ax.set_title(f"Distribution: {c} (n={x.size})")
+        ax.grid(True, alpha=0.3)
 
-    # log10 ratio histogram
-    ratio = df["real_var"] / df["pred_var"].replace(0.0, np.nan)
-    ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna()
-    plt.figure(figsize=(7, 4))
-    plt.hist(safe_log10(ratio), bins=60)
-    plt.title("Distribution of log10(real_var / pred_var)")
-    plt.xlabel("log10(real/pred)")
-    plt.ylabel("count")
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "hist_log10_real_over_pred.png"), dpi=150)
-    plt.close()
+        # helpful vertical lines
+        q = np.quantile(x, [0.5, 0.9, 0.99])
+        for qq in q:
+            ax.axvline(qq, linestyle="--", alpha=0.6)
+
+    _savefig(os.path.join(outdir, "distributions.png"))
 
 
-def plot_calibration(df: pd.DataFrame, outdir: str) -> None:
-    # Scatter: predicted vs realized variance (log-log)
-    x = df["pred_var"].replace(0.0, np.nan).to_numpy()
-    y = df["real_var"].replace(0.0, np.nan).to_numpy()
-    m = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
-    x, y = x[m], y[m]
+def plot_scatter(df: pd.DataFrame, outdir: str) -> None:
+    pairs = [
+        ("logeuc", "nll"),
+        ("kl", "nll"),
+        ("corr_spearman", "fro"),
+        ("corr_offdiag_fro", "fro"),
+        ("cond_ratio", "turnover_l1"),
+        ("port_mse_logvar", "turnover_l1"),
+    ]
+    pairs = [(x, y) for (x, y) in pairs if x in df.columns and y in df.columns]
+    if not pairs:
+        return
 
-    plt.figure(figsize=(6, 6))
-    plt.scatter(x, y, s=10)
-    plt.xscale("log")
-    plt.yscale("log")
-    plt.title("Calibration: Predicted vs Realized Variance (log-log)")
-    plt.xlabel("pred_var")
-    plt.ylabel("real_var")
+    for xcol, ycol in pairs:
+        sub = df[[xcol, ycol]].replace([np.inf, -np.inf], np.nan).dropna()
+        if len(sub) < 10:
+            continue
 
-    # Add y=x line (in log scale)
-    lo = min(np.min(x), np.min(y))
-    hi = max(np.max(x), np.max(y))
-    plt.plot([lo, hi], [lo, hi], linewidth=2)
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "scatter_pred_vs_real_var_loglog.png"), dpi=150)
-    plt.close()
+        plt.figure(figsize=(8.5, 6))
+        plt.scatter(sub[xcol].values, sub[ycol].values, s=12, alpha=0.6)
+        plt.xlabel(xcol)
+        plt.ylabel(ycol)
+        plt.title(f"{ycol} vs {xcol} (n={len(sub)})")
+        plt.grid(True, alpha=0.3)
 
-    # Scatter: Frobenius vs KL (both heavy-tailed; log y for KL)
-    plt.figure(figsize=(6, 5))
-    plt.scatter(df["fro"].to_numpy(), df["kl"].to_numpy(), s=10)
-    plt.yscale("log")
-    plt.title("Frobenius vs KL (KL log scale)")
-    plt.xlabel("Frobenius")
-    plt.ylabel("KL (log)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "scatter_fro_vs_kl.png"), dpi=150)
-    plt.close()
+        # log axes when it makes sense
+        if ycol in {"kl", "nll", "logeuc", "port_mse_logvar"} and np.nanmin(sub[ycol].values) > 0:
+            plt.yscale("log")
+        if xcol in {"kl", "nll", "logeuc", "port_mse_logvar"} and np.nanmin(sub[xcol].values) > 0:
+            plt.xscale("log")
 
-
-def make_summary_table(df: pd.DataFrame) -> pd.DataFrame:
-    ratio = (df["real_var"] / df["pred_var"].replace(0.0, np.nan)).replace([np.inf, -np.inf], np.nan)
-    out = pd.DataFrame(
-        {
-            "fro": df["fro"],
-            "kl": df["kl"],
-            "pred_var": df["pred_var"],
-            "real_var": df["real_var"],
-            "real_over_pred": ratio,
-            "log10_kl": safe_log10(df["kl"]),
-            "log10_real_over_pred": safe_log10(ratio.dropna()),
-        }
-    )
-    # robust-ish percentiles
-    summary = out.describe(percentiles=[0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99]).T
-    return summary
+        _savefig(os.path.join(outdir, f"scatter_{ycol}_vs_{xcol}.png"))
 
 
-def main(
-    csv_path: str = "results/regime_similarity_backtest.csv",
-    outdir: str = "results/plots_regime_similarity",
-    roll: int = 20,
-) -> None:
-    os.makedirs(outdir, exist_ok=True)
+def plot_worst_dates(df: pd.DataFrame, outdir: str, metric: str, topk: int = 10) -> None:
+    if metric not in df.columns:
+        return
+    s = df[metric].replace([np.inf, -np.inf], np.nan).dropna()
+    if s.empty:
+        return
 
-    df = load_results(csv_path)
+    worst = s.sort_values(ascending=False).head(topk)
 
-    # Print quick diagnostics
-    print("Loaded:", df.shape, "| date range:", df.index.min().date(), "->", df.index.max().date())
-    print("Missing fraction per column:")
-    print((df.isna().mean()).sort_values(ascending=False))
+    plt.figure(figsize=(10, 4))
+    plt.bar([d.strftime("%Y-%m-%d") for d in worst.index], worst.values)
+    plt.xticks(rotation=45, ha="right")
+    plt.title(f"Worst {topk} dates by {metric}")
+    plt.grid(True, axis="y", alpha=0.3)
+    _savefig(os.path.join(outdir, f"worst_{topk}_{metric}.png"))
 
-    plot_time_series(df, outdir=outdir, roll=roll)
-    plot_distributions(df, outdir=outdir)
-    plot_calibration(df, outdir=outdir)
 
-    summary = make_summary_table(df)
-    summary.to_csv(os.path.join(outdir, "summary_table.csv"))
-    print("\nSaved plots to:", outdir)
-    print("Saved summary:", os.path.join(outdir, "summary_table.csv"))
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--csv", type=str, default="results/regime_similarity_backtest.csv")
+    ap.add_argument("--outdir", type=str, default="results/figs_regime_similarity")
+    ap.add_argument("--start", type=str, default=None)
+    ap.add_argument("--end", type=str, default=None)
+    ap.add_argument("--roll", type=int, default=21)
+    args = ap.parse_args()
+
+    df = _read_results(args.csv)
+    df = _maybe_slice(df, args.start, args.end)
+    _ensure_dir(args.outdir)
+
+    # Basic sanity print
+    print("Loaded:", args.csv)
+    print("Date range:", df.index.min(), "->", df.index.max())
+    print("Columns:", list(df.columns))
+    print(df.describe(include="all").T.head(20))
+
+    plot_timeseries(df, args.outdir)
+    plot_rolling(df, args.outdir, window=args.roll)
+    plot_distributions(df, args.outdir)
+    plot_scatter(df, args.outdir)
+
+    # Worst-date bar charts for key metrics
+    for m in ["kl", "nll", "logeuc", "corr_offdiag_fro", "port_mse_logvar", "turnover_l1"]:
+        plot_worst_dates(df, args.outdir, metric=m, topk=10)
+
+    print(f"\nSaved figures to: {args.outdir}")
+    print("Key files:")
+    print("  timeseries_metrics.png")
+    print(f"  rolling_median_{args.roll}d.png")
+    print("  distributions.png")
+    print("  scatter_*.png")
+    print("  worst_10_*.png")
 
 
 if __name__ == "__main__":
