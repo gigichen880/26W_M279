@@ -281,29 +281,22 @@ class PCAWindowEmbedder:
         )
 
     def _impute_window(self, X: np.ndarray) -> np.ndarray:
-        """
-        Window-local imputation (no lookahead):
-        - replace non-finite with NaN
-        - fill NaNs in each column with that column's mean within the window
-        - if a column is all-NaN in the window, fill with 0 (but such windows
-          should typically have been rejected by validation)
-        - replace remaining NaN/inf with 0
-        """
         X = np.asarray(X, dtype=float)
         X = np.where(np.isfinite(X), X, np.nan)
 
-        # column means ignoring NaNs; if all-NaN -> NaN
-        col_mean = np.nanmean(X, axis=0)  # (N,)
-        col_mean = np.where(np.isfinite(col_mean), col_mean, 0.0)
+        # which columns have at least one finite value?
+        col_has = np.isfinite(X).any(axis=0)  # (N,)
 
-        # fill NaNs with column mean
+        col_mean = np.zeros(X.shape[1], dtype=float)
+        if np.any(col_has):
+            col_mean[col_has] = np.nanmean(X[:, col_has], axis=0)  # no empty-slice warning
+
+        # fill NaNs with column means (0 for all-NaN columns)
         nan_i, nan_j = np.where(np.isnan(X))
         if nan_i.size > 0:
             X[nan_i, nan_j] = col_mean[nan_j]
 
-        # ensure finite
-        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-        return X
+        return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
     def fit(self, returns_df: pd.DataFrame) -> "PCAWindowEmbedder":
         R = returns_df.to_numpy(dtype=float)  # [T,N]

@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
+from .core import project_to_spd
 
 def frobenius_error(S_hat: NDArray[np.floating], S_true: NDArray[np.floating]) -> float:
     S_hat = np.asarray(S_hat, dtype=float)
@@ -283,3 +284,100 @@ def weight_concentration_stats(w: np.ndarray) -> dict[str, float]:
     maxw = float(np.max(np.abs(w)))
     l1 = float(np.sum(np.abs(w)))
     return {"w_hhi": hhi, "w_max_abs": maxw, "w_l1": l1}
+
+def cov_from_window(window: np.ndarray, ddof: int = 1) -> np.ndarray:
+    """
+    Sample covariance from a (T, N) return window, pairwise handling via np.nan.
+    Note: np.cov does NOT handle nan; we do a simple nan->0 after demeaning with nanmean.
+    If you already have a robust cov_from_returns() in target_objects, reuse that instead.
+    """
+    X = window.astype(float)
+    mu = np.nanmean(X, axis=0, keepdims=True)
+    Xc = X - mu
+    Xc = np.nan_to_num(Xc, nan=0.0)
+    # effective sample size per pair is not accounted for here; for fairness,
+    # prefer using your CovarianceTarget / cov_from_returns if available.
+    S = (Xc.T @ Xc) / max(Xc.shape[0] - ddof, 1)
+    return (S + S.T) / 2.0
+
+
+def baseline_rolling_cov(past: np.ndarray, ddof: int = 1) -> np.ndarray:
+    return cov_from_window(past, ddof=ddof)
+
+
+def baseline_persistence_realized_cov(R: np.ndarray, raw_anchor: int, horizon: int, ddof: int = 1) -> np.ndarray:
+    """
+    Uses the previous horizon window [t-H+1 ... t] as the forecast for [t+1 ... t+H].
+    """
+    prev = R[raw_anchor - horizon + 1 : raw_anchor + 1, :]
+    return cov_from_window(prev, ddof=ddof)
+
+
+def baseline_shrink_to_diag(S: np.ndarray, gamma: float = 0.3) -> np.ndarray:
+    D = np.diag(np.diag(S))
+    return (1.0 - gamma) * S + gamma * D
+
+def eval_all_metrics(
+    Sigma_hat: np.ndarray,
+    Sigma_true: np.ndarray,
+    fut: np.ndarray,
+    long_only: bool,
+    W_eval: np.ndarray,
+) -> dict:
+    # base
+    fro = frobenius_error(Sigma_hat, Sigma_true)
+
+    # project SPD for geometry metrics
+    S_hat = project_to_spd((Sigma_hat + Sigma_hat.T) / 2.0, eps=1e-8)
+    S_true = project_to_spd((Sigma_true + Sigma_true.T) / 2.0, eps=1e-8)
+
+    out = {"fro": fro}
+
+    out["kl"] = gaussian_kl_divergence(S_true=S_true, S_hat=S_hat)
+
+    try:
+        out["nll"] = gaussian_nll_future_window(Sigma_hat=S_hat, fut_returns=fut, eps=1e-10)
+    except Exception:
+        out["nll"] = np.nan
+
+    try:
+        out["stein"] = stein_loss(S_true=S_true, S_hat=S_hat, eps=1e-10)
+    except Exception:
+        out["stein"] = np.nan
+
+    try:
+        out["logeuc"] = log_euclidean_distance(S_true=S_true, S_hat=S_hat, eps=1e-10)
+    except Exception:
+        out["logeuc"] = np.nan
+
+    try:
+        out["corr_offdiag_fro"] = corr_offdiag_fro(S_true=S_true, S_hat=S_hat)
+    except Exception:
+        out["corr_offdiag_fro"] = np.nan
+
+    try:
+        out["corr_spearman"] = corr_upper_spearman(S_true=S_true, S_hat=S_hat)
+    except Exception:
+        out["corr_spearman"] = np.nan
+
+    try:
+        out["eig_log_mse"] = eigen_log_mse(S_true=S_true, S_hat=S_hat, eps=1e-10)
+    except Exception:
+        out["eig_log_mse"] = np.nan
+
+    try:
+        cond_hat = condition_number(S_hat, eps=1e-10)
+        cond_true = condition_number(S_true, eps=1e-10)
+        out["cond_ratio"] = float(cond_hat / max(cond_true, 1e-12))
+    except Exception:
+        out["cond_ratio"] = np.nan
+
+    # GMVP probe
+    w = min_variance_weights(S_hat, long_only=long_only)
+    out["pred_var"] = realized_portfolio_variance(w, S_hat)
+    out["real_var"] = realized_portfolio_variance(w, S_true)
+
+    # weight stats + multi-portfolio errors
+    out.update(weight_concentration_stats(w))
+    out.update(multi_portfolio_risk_errors(Sigma_hat=S_hat, Sigma_true=S_true, W_eval=W_eval))
+    return out

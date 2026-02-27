@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict, Any
+from xml.parsers.expat import model
 
 import numpy as np
 import pandas as pd
@@ -66,6 +67,7 @@ class RegimeAwareSimilarityForecaster:
 
     # for debugging / alignment
     anchor_dates_: Optional[pd.DatetimeIndex] = None
+    anchor_rows_: Optional[np.ndarray] = None  # shape [T0], raw row index for each sample
 
     def _build_windows(self, R: NDArray[np.floating]) -> List[Tuple[int, slice, slice]]:
         """
@@ -131,6 +133,7 @@ class RegimeAwareSimilarityForecaster:
             embeds.append(e)
             targets.append(y)
             anchor_pos.append(anchor)
+        self.anchor_rows_ = np.asarray(anchor_pos, dtype=np.int64)
 
         if not embeds:
             raise ValueError(
@@ -168,65 +171,57 @@ class RegimeAwareSimilarityForecaster:
         tau = max(self.tau, self.eps)
         kappa = np.exp(-dist / tau)
         return kappa.astype(float)
+    
+    # def predict_at_raw_anchor(
+    #     self,
+    #     past: np.ndarray,            # (L, N)
+    #     raw_anchor: int,             # <-- ADD THIS
+    #     k_neighbors: int = 50,
+    # ) -> np.ndarray:
+    #     self._check_fitted()
+    #     assert self.embeds_ is not None and self.targets_ is not None and self.knn_ is not None
+    #     assert self.PI_ is not None and self.ALPHA_ is not None and self.A_ is not None
+    #     assert self.anchor_rows_ is not None
 
-    def predict_at_anchor(
-        self,
-        anchor_pos: int,
-        k: int = 50,
-        exclude_self: bool = True,
-        return_debug: bool = False,
-    ):
-        """
-        anchor_pos is index in the *sample space* (0..T0-1), not the raw returns row.
+    #     # Stage 1: embed current window
+    #     e0 = self.embedder.embed(past).astype(float)  # (D,)
 
-        Returns:
-          yhat: final mixed forecast  (stage 5)
-          optionally debug dict
-        """
-        self._check_fitted()
-        assert self.embeds_ is not None and self.targets_ is not None and self.knn_ is not None
-        assert self.PI_ is not None and self.ALPHA_ is not None
+    #     # Stage 2: pi0 for current point (safe: uses trained GMM)
+    #     pi0 = self.regime_model.predict_pi(e0[None, :])[0]  # (K,)
 
-        e0 = self.embeds_[anchor_pos]
-        exclude = anchor_pos if exclude_self else None
+    #     # Stage 3: for *raw* anchor, safest is alpha = pi0 (no misaligned transition jump)
+    #     alpha = pi0
 
-        idx, dist = self.knn_.query(e=e0, k=min(k, self.embeds_.shape[0]), exclude_index=exclude)
+    #     # Stage 4: retrieve neighbors from library (overshoot then filter)
+    #     k = min(k_neighbors, self.embeds_.shape[0])
+    #     k_search = min(max(5 * k, k), self.embeds_.shape[0])
+    #     idx_all, dist_all = self.knn_.query(e=e0, k=k_search, exclude_index=None)
 
-        # Stage 4: similarity kernel kappa
-        kappa = self._kappa_from_dist(dist)  # [M]
-        # normalize kappa globally for stability (optional)
-        kappa = kappa / max(kappa.sum(), self.eps)
+    #     # CRITICAL: only use neighbors whose labels are observable at time raw_anchor
+    #     # neighbor anchor a must satisfy a + H <= raw_anchor  <=>  a <= raw_anchor - H
+    #     H = self.horizon
+    #     is_label_available = self.anchor_rows_[idx_all] <= (raw_anchor - H)
+    #     idx = idx_all[is_label_available]
+    #     dist = dist_all[is_label_available]
 
-        # Stage 5: regime-aware neighbor weights
-        PI_nbr = self.PI_[idx]  # [M, K]
-        W = RegimeAwareWeights(eps=self.eps).compute(kappa=kappa, PI_neighbors=PI_nbr)  # [K, M]
+    #     if idx.size == 0:
+    #         raise ValueError("No label-available neighbors (try smaller horizon or larger train history).")
+    #     if idx.size > k:
+    #         idx = idx[:k]
+    #         dist = dist[:k]
 
-        K = W.shape[0]
-        # regime-conditional forecasts yhat^(k)
-        yk_list = []
-        for kk in range(K):
-            w = W[kk]  # [M]
-            yk = self.aggregator.aggregate(self.targets_[idx], w)  # [...]
-            yk_list.append(yk)
-        YK = np.stack(yk_list, axis=0)  # [K, ...]
+    #     # Stage 4 kernel
+    #     kappa = self._kappa_from_dist(dist)
+    #     kappa = kappa / max(kappa.sum(), model.eps)
 
-        alpha = self.ALPHA_[anchor_pos]  # [K]
-        # final mix over regimes
-        yhat = np.tensordot(alpha, YK, axes=(0, 0))  # [...]
+    #     # Stage 5 regime-aware neighbor weights
+    #     PI_nbr = self.PI_[idx]  # (M, K)
+    #     W = RegimeAwareWeights(eps=self.eps).compute(kappa=kappa, PI_neighbors=PI_nbr)  # (K, M)
 
-        yhat = self.target_object.postprocess(yhat)
+    #     yk_list = []
+    #     for kk in range(W.shape[0]):
+    #         yk_list.append(self.aggregator.aggregate(self.targets_[idx], W[kk]))
+    #     YK = np.stack(yk_list, axis=0)
 
-        if not return_debug:
-            return yhat
-
-        dbg: Dict[str, Any] = {
-            "neighbor_idx": idx,
-            "neighbor_dist": dist,
-            "kappa": kappa,
-            "PI_neighbors": PI_nbr,
-            "alpha": alpha,
-            "YK": YK,
-        }
-        if self.anchor_dates_ is not None:
-            dbg["anchor_date"] = self.anchor_dates_[anchor_pos]
-        return yhat, dbg
+    #     yhat = np.tensordot(alpha, YK, axes=(0, 0))
+    #     return self.target_object.postprocess(yhat)

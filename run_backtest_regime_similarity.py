@@ -6,20 +6,11 @@ import numpy as np
 import pandas as pd
 
 from similarity_forecast.backtests import (
-    frobenius_error,
-    gaussian_kl_divergence,
-    stein_loss,
-    gaussian_nll_future_window,
-    log_euclidean_distance,
-    corr_offdiag_fro,
-    corr_upper_spearman,
-    eigen_log_mse,
-    condition_number,
     make_eval_portfolios,
-    multi_portfolio_risk_errors,
-    min_variance_weights,
-    realized_portfolio_variance,
-    weight_concentration_stats,
+    eval_all_metrics,
+    baseline_rolling_cov,
+    baseline_persistence_realized_cov,
+    baseline_shrink_to_diag
 )
 from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder
 from similarity_forecast.target_objects import CovarianceTarget
@@ -95,53 +86,55 @@ def build_model(
 def predict_at_raw_anchor(
     model: RegimeAwareSimilarityForecaster,
     past: np.ndarray,            # (L, N)
+    raw_anchor: int,             # <-- ADD THIS
     k_neighbors: int = 50,
 ) -> np.ndarray:
-    """
-    Predict at a *raw* anchor time using ONLY the lookback window `past`,
-    querying neighbors from the fitted sample library (model.embeds_/targets_).
-
-    This avoids requiring the raw anchor date to appear in model.anchor_dates_
-    (it usually won't, because targets need future H days inside train_df).
-    """
     model._check_fitted()
     assert model.embeds_ is not None and model.targets_ is not None and model.knn_ is not None
     assert model.PI_ is not None and model.ALPHA_ is not None and model.A_ is not None
+    assert model.anchor_rows_ is not None
 
     # Stage 1: embed current window
     e0 = model.embedder.embed(past).astype(float)  # (D,)
 
-    # Stage 4: retrieve neighbors in embedding library
-    idx, dist = model.knn_.query(e=e0, k=min(k_neighbors, model.embeds_.shape[0]), exclude_index=None)
-
-    # Stage 4 kernel
-    kappa = model._kappa_from_dist(dist)  # (M,)
-    kappa = kappa / max(kappa.sum(), model.eps)
-
-    # Stage 2 for current point: pi0 = p(regime | e0)
+    # Stage 2: pi0 for current point (safe: uses trained GMM)
     pi0 = model.regime_model.predict_pi(e0[None, :])[0]  # (K,)
 
-    # Stage 3 for current point: filtered alpha
-    # Use the last filtered alpha from training as alpha_prev, propagate through A, then combine with pi0
-    alpha_prev = model.ALPHA_[-1]            # (K,)
-    alpha_prior = alpha_prev @ model.A_      # (K,)
-    alpha = alpha_prior * pi0
-    alpha = alpha / max(alpha.sum(), model.eps)
+    # Stage 3: for *raw* anchor, safest is alpha = pi0 (no misaligned transition jump)
+    alpha = pi0
 
-    # Stage 5: regime-aware neighbor weights
+    # Stage 4: retrieve neighbors from library (overshoot then filter)
+    k = min(k_neighbors, model.embeds_.shape[0])
+    k_search = min(max(5 * k, k), model.embeds_.shape[0])
+    idx_all, dist_all = model.knn_.query(e=e0, k=k_search, exclude_index=None)
+
+    # CRITICAL: only use neighbors whose labels are observable at time raw_anchor
+    # neighbor anchor a must satisfy a + H <= raw_anchor  <=>  a <= raw_anchor - H
+    H = model.horizon
+    is_label_available = model.anchor_rows_[idx_all] <= (raw_anchor - H)
+    idx = idx_all[is_label_available]
+    dist = dist_all[is_label_available]
+
+    if idx.size == 0:
+        raise ValueError("No label-available neighbors (try smaller horizon or larger train history).")
+    if idx.size > k:
+        idx = idx[:k]
+        dist = dist[:k]
+
+    # Stage 4 kernel
+    kappa = model._kappa_from_dist(dist)
+    kappa = kappa / max(kappa.sum(), model.eps)
+
+    # Stage 5 regime-aware neighbor weights
     PI_nbr = model.PI_[idx]  # (M, K)
     W = RegimeAwareWeights(eps=model.eps).compute(kappa=kappa, PI_neighbors=PI_nbr)  # (K, M)
 
-    # regime-conditional forecasts then mix
-    K = W.shape[0]
     yk_list = []
-    for kk in range(K):
-        w = W[kk]  # (M,)
-        yk = model.aggregator.aggregate(model.targets_[idx], w)  # (N, N) for CovarianceTarget
-        yk_list.append(yk)
-    YK = np.stack(yk_list, axis=0)  # (K, N, N)
+    for kk in range(W.shape[0]):
+        yk_list.append(model.aggregator.aggregate(model.targets_[idx], W[kk]))
+    YK = np.stack(yk_list, axis=0)
 
-    yhat = np.tensordot(alpha, YK, axes=(0, 0))  # (N, N)
+    yhat = np.tensordot(alpha, YK, axes=(0, 0))
     return model.target_object.postprocess(yhat)
 
 def run_backtest(
@@ -174,14 +167,14 @@ def run_backtest(
     raw_anchor_end = T - horizon - 1
     min_samples_for_gmm = 50
 
-    # NEW: fixed portfolio set for evaluation (kept constant across time)
+    # fixed portfolio set for evaluation (kept constant across time)
     W_eval = make_eval_portfolios(N=N, n_rand=20, seed=0, long_only=True)
 
     rows = []
     model: RegimeAwareSimilarityForecaster | None = None
     last_refit_raw_anchor: int | None = None
 
-    # NEW: weight stability tracking (min-var)
+    # weight stability tracking (min-var)
     w_prev: np.ndarray | None = None
 
     for raw_anchor in range(raw_anchor_start, raw_anchor_end + 1):
@@ -211,7 +204,7 @@ def run_backtest(
         past = R[raw_anchor - lookback + 1 : raw_anchor + 1, :]  # (L, N)
 
         try:
-            Sigma_hat = predict_at_raw_anchor(model, past=past, k_neighbors=k_neighbors)
+            Sigma_hat = predict_at_raw_anchor(model, past=past, raw_anchor=raw_anchor, k_neighbors=k_neighbors)
         except Exception as e:
             if verbose:
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} prediction failed: {e}")
@@ -223,7 +216,7 @@ def run_backtest(
             if verbose:
                 print(f"[skip] {anchor_date.date()} future window failed validation")
             continue
-        
+
         try:
             Sigma_true = model.target_object.target(fut)
         except Exception as e:
@@ -232,105 +225,35 @@ def run_backtest(
             continue
         Sigma_true = np.asarray(Sigma_true, dtype=float)
 
-        # --- Base metrics (your existing ones) ---
-        fro = frobenius_error(Sigma_hat, Sigma_true)
+        # --- OUR MODEL ---
+        m = eval_all_metrics(Sigma_hat, Sigma_true, fut=fut, long_only=long_only, W_eval=W_eval)
+        m = {f"model_{k}": v for k, v in m.items()}
 
-        # Ensure SPD for the SPD-geometry metrics
-        Sigma_hat = project_to_spd((Sigma_hat + Sigma_hat.T) / 2.0, eps=1e-8)
-        Sigma_true = project_to_spd((Sigma_true + Sigma_true.T) / 2.0, eps=1e-8)
+        # --- BASELINE: rolling cov ---
+        S_roll = baseline_rolling_cov(past, ddof=1)   # or use your CovarianceTarget
+        b1 = eval_all_metrics(S_roll, Sigma_true, fut=fut, long_only=long_only, W_eval=W_eval)
+        b1 = {f"roll_{k}": v for k, v in b1.items()}
 
-        kl = gaussian_kl_divergence(S_true=Sigma_true, S_hat=Sigma_hat)
+        # --- BASELINE: persistence (prev horizon realized) ---
+        S_pers = baseline_persistence_realized_cov(R, raw_anchor=raw_anchor, horizon=horizon, ddof=1)
+        b2 = eval_all_metrics(S_pers, Sigma_true, fut=fut, long_only=long_only, W_eval=W_eval)
+        b2 = {f"pers_{k}": v for k, v in b2.items()}
 
-        # --- NEW: Likelihood + SPD-geometry metrics ---
-        try:
-            nll = gaussian_nll_future_window(Sigma_hat=Sigma_hat, fut_returns=fut, eps=1e-10)
-        except Exception:
-            nll = np.nan
+        # --- BASELINE: shrink-to-diag on rolling ---
+        S_shrink = baseline_shrink_to_diag(project_to_spd((S_roll + S_roll.T) / 2.0, eps=1e-8), gamma=0.3)
+        b3 = eval_all_metrics(S_shrink, Sigma_true, fut=fut, long_only=long_only, W_eval=W_eval)
+        b3 = {f"shrink_{k}": v for k, v in b3.items()}
 
-        try:
-            stein = stein_loss(S_true=Sigma_true, S_hat=Sigma_hat, eps=1e-10)
-        except Exception:
-            stein = np.nan
+        row = {"date": anchor_date, "raw_anchor": raw_anchor, **m, **b1, **b2, **b3}
 
-        try:
-            logeuc = log_euclidean_distance(S_true=Sigma_true, S_hat=Sigma_hat, eps=1e-10)
-        except Exception:
-            logeuc = np.nan
+        # --- optional: SKILL ratios (model vs baseline) ---
+        for key in ["fro", "kl", "nll", "stein", "logeuc", "corr_offdiag_fro", "port_mse_logvar"]:
+            mk = f"model_{key}"
+            bk = f"pers_{key}"  # choose your primary baseline here
+            if mk in row and bk in row and np.isfinite(row[mk]) and np.isfinite(row[bk]) and row[bk] != 0:
+                row[f"skill_{key}_vs_pers"] = float(row[mk] / row[bk])
 
-        # --- NEW: Correlation skill metrics ---
-        try:
-            corr_fro = corr_offdiag_fro(S_true=Sigma_true, S_hat=Sigma_hat)
-        except Exception:
-            corr_fro = np.nan
-
-        try:
-            corr_spear = corr_upper_spearman(S_true=Sigma_true, S_hat=Sigma_hat)
-        except Exception:
-            corr_spear = np.nan
-
-        # --- NEW: Spectrum/conditioning diagnostics ---
-        try:
-            eig_logmse = eigen_log_mse(S_true=Sigma_true, S_hat=Sigma_hat, eps=1e-10)
-        except Exception:
-            eig_logmse = np.nan
-
-        try:
-            cond_hat = condition_number(Sigma_hat, eps=1e-10)
-            cond_true = condition_number(Sigma_true, eps=1e-10)
-            cond_ratio = float(cond_hat / max(cond_true, 1e-12))
-        except Exception:
-            cond_hat, cond_true, cond_ratio = np.nan, np.nan, np.nan
-
-        # --- Portfolio probe (your existing + extra stability) ---
-        w = min_variance_weights(Sigma_hat, long_only=long_only)
-        pred_var = realized_portfolio_variance(w, Sigma_hat)
-        real_var = realized_portfolio_variance(w, Sigma_true)
-
-        # NEW: turnover, concentration
-        if w_prev is None:
-            turnover_l1 = np.nan
-        else:
-            turnover_l1 = float(np.sum(np.abs(w - w_prev)))
-        w_prev = w.copy()
-
-        w_stats = weight_concentration_stats(w)
-
-        # --- Multi-portfolio risk errors (fixed portfolio set) ---
-        port_err = multi_portfolio_risk_errors(Sigma_hat=Sigma_hat, Sigma_true=Sigma_true, W_eval=W_eval)
-
-        rows.append(
-            {
-                "date": anchor_date,
-                "raw_anchor": raw_anchor,
-
-                "fro": fro,
-                "kl": kl,
-                "pred_var": pred_var,
-                "real_var": real_var,
-
-                # probabilistic + SPD geometry
-                "nll": nll,
-                "stein": stein,
-                "logeuc": logeuc,
-
-                # correlation skill
-                "corr_offdiag_fro": corr_fro,
-                "corr_spearman": corr_spear,
-
-                # spectrum / conditioning
-                "eig_log_mse": eig_logmse,
-                "cond_hat": cond_hat,
-                "cond_true": cond_true,
-                "cond_ratio": cond_ratio,
-
-                # portfolio stability diagnostics
-                "turnover_l1": turnover_l1,
-                **w_stats,
-
-                # multi-portfolio errors
-                **port_err,
-            }
-        )
+        rows.append(row)
 
     if not rows:
         raise RuntimeError(
@@ -342,6 +265,52 @@ def run_backtest(
     out = pd.DataFrame(rows).set_index("date").sort_index()
     return out
 
+def summarize_comparison(results: pd.DataFrame):
+    compare_keys = [
+        "fro", "kl", "nll", "stein", "logeuc",
+        "corr_offdiag_fro", "corr_spearman",
+        "port_mse_logvar"
+    ]
+
+    rows = []
+
+    for key in compare_keys:
+        m_col = f"model_{key}"
+        p_col = f"pers_{key}"
+        r_col = f"roll_{key}"
+        s_col = f"shrink_{key}"
+
+        if m_col not in results.columns:
+            continue
+
+        row = {"metric": key}
+
+        for label, col in [
+            ("model", m_col),
+            ("pers", p_col),
+            ("roll", r_col),
+            ("shrink", s_col),
+        ]:
+            if col in results.columns:
+                row[label] = float(results[col].mean())
+            else:
+                row[label] = np.nan
+
+        # Skill (ratio for losses, diff for correlation)
+        if key == "corr_spearman":
+            row["skill_vs_pers"] = row["model"] - row["pers"]
+            row["win_rate_vs_pers"] = float(
+                (results[m_col] > results[p_col]).mean()
+            )
+        else:
+            row["skill_vs_pers"] = row["model"] / row["pers"]
+            row["win_rate_vs_pers"] = float(
+                (results[m_col] < results[p_col]).mean()
+            )
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
 
 def main():
     returns_df = clean_returns_matrix_at_load(
@@ -358,8 +327,8 @@ def main():
         returns_df=returns_df,
         lookback=40,
         horizon=30,
-        start_date="2017-01-01",
-        end_date="2022-05-31",
+        start_date="2015-01-01",
+        end_date="2020-5-31",
         k_neighbors=10,
         refit_every=5,
         long_only=False,
@@ -369,24 +338,32 @@ def main():
     # ----------------------------
     # Summaries
     # ----------------------------
-    headline_cols = [
+    BASE = [
         "fro", "kl", "nll", "stein", "logeuc",
         "corr_offdiag_fro", "corr_spearman",
         "eig_log_mse", "cond_ratio",
         "pred_var", "real_var",
         "port_mse_var", "port_mse_logvar", "port_mae_logvar",
-        "turnover_l1", "w_hhi", "w_max_abs",
+        "w_hhi", "w_max_abs", "w_l1",
     ]
+
+    METHODS = ["model", "pers", "roll", "shrink"]
+
+    headline_cols = []
+    for m in METHODS:
+        headline_cols += [f"{m}_{k}" for k in BASE]
+
+    # keep only existing
     headline_cols = [c for c in headline_cols if c in results.columns]
 
     print("\n===== SUMMARY (headline metrics) =====")
     print(results[headline_cols].describe())
 
-    # Optional: quick “worst offenders” to debug outliers
-    for key in ["kl", "nll", "logeuc", "corr_offdiag_fro", "port_mse_logvar", "turnover_l1"]:
-        if key in results.columns:
-            print(f"\n===== WORST 5 by {key} =====")
-            print(results[[key]].sort_values(key, ascending=False).head(5))
+    # # Optional: quick “worst offenders” to debug outliers
+    # for key in ["kl", "nll", "logeuc", "corr_offdiag_fro", "port_mse_logvar", "turnover_l1"]:
+    #     if key in results.columns:
+    #         print(f"\n===== WORST 5 by {key} =====")
+    #         print(results[[key]].sort_values(key, ascending=False).head(5))
 
     # ----------------------------
     # Portfolio calibration summary (GMVP)
@@ -418,6 +395,11 @@ def main():
     if stab_cols:
         print("\n===== PORTFOLIO STABILITY =====")
         print(results[stab_cols].describe())
+
+    print("\n===== METHOD COMPARISON =====")
+    comparison = summarize_comparison(results)
+    comparison.to_csv("results/regime_similarity_comparison.csv", index=False)
+    print(comparison)
 
     # ----------------------------
     # Save
