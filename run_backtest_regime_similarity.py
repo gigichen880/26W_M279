@@ -27,6 +27,7 @@ from similarity_forecast.core import LogEuclideanSPDMean, validate_window, proje
 from similarity_forecast.regimes import RegimeModel
 from similarity_forecast.pipeline import RegimeAwareSimilarityForecaster
 from similarity_forecast.regime_weighting import RegimeAwareWeights
+from scripts.clean_data import clean_returns_matrix_at_load
 import dataclasses
 from numpy.typing import NDArray
 
@@ -353,8 +354,8 @@ def main():
         returns_df=returns_df,
         lookback=60,
         horizon=30,
-        start_date="2018-01-01",
-        end_date="2020-05-31",
+        start_date="2017-01-01",
+        end_date="2022-05-31",
         k_neighbors=50,
         refit_every=20,
         long_only=False,
