@@ -101,10 +101,16 @@ class RegimeAwareSimilarityForecaster:
         if not windows:
             raise ValueError("Not enough rows for lookback/horizon.")
 
-        embeds = []
-        targets = []
-        anchor_pos = []
+        # fit embedder if it supports fit()
+        if hasattr(self.embedder, "fit"):
+            try:
+                self.embedder.fit(returns_df)
+            except TypeError:
+                pass
+
+        embeds, targets, anchor_pos = [], [], []
         skipped = 0
+        
         for anchor, past_sl, fut_sl in windows:
             past = R[past_sl]
             fut = R[fut_sl]
