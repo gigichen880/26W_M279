@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 import os
 import numpy as np
 import pandas as pd
@@ -7,10 +8,19 @@ import pandas as pd
 from similarity_forecast.backtests import (
     frobenius_error,
     gaussian_kl_divergence,
+    stein_loss,
+    gaussian_nll_future_window,
+    log_euclidean_distance,
+    corr_offdiag_fro,
+    corr_upper_spearman,
+    eigen_log_mse,
+    condition_number,
+    make_eval_portfolios,
+    multi_portfolio_risk_errors,
     min_variance_weights,
     realized_portfolio_variance,
+    weight_concentration_stats,
 )
-
 from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder
 from similarity_forecast.target_objects import CovarianceTarget
 from similarity_forecast.core import LogEuclideanSPDMean, validate_window, project_to_spd
@@ -19,6 +29,25 @@ from similarity_forecast.pipeline import RegimeAwareSimilarityForecaster
 from similarity_forecast.regime_weighting import RegimeAwareWeights
 import dataclasses
 from numpy.typing import NDArray
+from scripts.clean_data import clean_returns_matrix_at_load
+
+def debug_R_at(R, t, date=None, tag=""):
+    x = R[t, :]
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        print(date, tag, "EMPTY row")
+        return
+    print(
+        date, tag,
+        "row_std", float(np.std(x)),
+        "row_q50|r|", float(np.median(np.abs(x))),
+        "row_q99|r|", float(np.quantile(np.abs(x), 0.99)),
+        "row_max|r|", float(np.max(np.abs(x))),
+        "row_mean", float(np.mean(x)),
+        "n", int(x.size),
+    )
+
+
 
 @dataclasses.dataclass(frozen=True)
 class ArithmeticSPDMean:
@@ -35,7 +64,7 @@ def build_model(
     lookback: int = 60,
     horizon: int = 20,
     n_regimes: int = 4,
-    tau: float = 20.0,
+    tau: float = 5.0,
     k_eigs: int = 32,
     ddof: int = 1,
     random_state: int = 0,
@@ -115,7 +144,6 @@ def predict_at_raw_anchor(
     yhat = np.tensordot(alpha, YK, axes=(0, 0))  # (N, N)
     return model.target_object.postprocess(yhat)
 
-
 def run_backtest(
     returns_df: pd.DataFrame,
     lookback: int = 60,
@@ -123,21 +151,14 @@ def run_backtest(
     start_date: str | None = None,
     end_date: str | None = None,
     k_neighbors: int = 50,
-    refit_every: int = 20,  # refit model every N anchors
+    refit_every: int = 20,
     long_only: bool = False,
     verbose: bool = True,
 ) -> pd.DataFrame:
-    """
-    Walk-forward evaluation (NO leakage):
-      - At raw anchor t: use past window (t-L+1..t) to embed/query neighbors
-      - Neighbor library is built by fitting the model on train_df up to t (inclusive),
-        which only includes samples whose targets lie fully inside train_df.
-      - True target Σtrue is computed from (t+1..t+H) using the SAME TargetObject.
-    """
+
     if not isinstance(returns_df.index, pd.DatetimeIndex):
         raise ValueError("returns_df.index must be a DatetimeIndex for mapping anchor dates.")
 
-    # Optional date slicing
     df = returns_df.sort_index()
     if start_date is not None:
         df = df.loc[pd.to_datetime(start_date) :]
@@ -148,20 +169,24 @@ def run_backtest(
     dates = df.index
     T, N = R.shape
 
-    # raw anchors must satisfy: have past L days and future H days
     burn_in = 252
     raw_anchor_start = lookback + horizon + burn_in
-    raw_anchor_end = T - horizon - 1  # inclusive last anchor index
+    raw_anchor_end = T - horizon - 1
     min_samples_for_gmm = 50
+
+    # NEW: fixed portfolio set for evaluation (kept constant across time)
+    W_eval = make_eval_portfolios(N=N, n_rand=20, seed=0, long_only=True)
 
     rows = []
     model: RegimeAwareSimilarityForecaster | None = None
     last_refit_raw_anchor: int | None = None
 
+    # NEW: weight stability tracking (min-var)
+    w_prev: np.ndarray | None = None
+
     for raw_anchor in range(raw_anchor_start, raw_anchor_end + 1):
-        # refit schedule
         if (model is None) or (last_refit_raw_anchor is None) or (raw_anchor - last_refit_raw_anchor >= refit_every):
-            train_df = df.iloc[: raw_anchor + 1]  # up to raw_anchor inclusive
+            train_df = df.iloc[: raw_anchor + 1]
             model = build_model(lookback=lookback, horizon=horizon)
 
             if verbose:
@@ -169,7 +194,6 @@ def run_backtest(
 
             model.fit(train_df)
 
-            # Guard: too few samples after NA validation / window construction
             if model.anchor_dates_ is None or len(model.anchor_dates_) < min_samples_for_gmm:
                 if verbose:
                     t0 = 0 if model.anchor_dates_ is None else len(model.anchor_dates_)
@@ -184,10 +208,8 @@ def run_backtest(
         assert model is not None
         anchor_date = dates[raw_anchor]
 
-        # --- Build past window at CURRENT raw_anchor ---
         past = R[raw_anchor - lookback + 1 : raw_anchor + 1, :]  # (L, N)
 
-        # --- Forecast Σhat using past-only query (no need for anchor_pos mapping) ---
         try:
             Sigma_hat = predict_at_raw_anchor(model, past=past, k_neighbors=k_neighbors)
         except Exception as e:
@@ -195,39 +217,114 @@ def run_backtest(
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} prediction failed: {e}")
             continue
         Sigma_hat = np.asarray(Sigma_hat, dtype=float)
-        # print("Sigma_hat", np.trace(Sigma_hat)/Sigma_hat.shape[0])
 
-        # --- True Σtrue from realized future window ---
         fut = R[raw_anchor + 1 : raw_anchor + horizon + 1, :]  # (H, N)
         try:
-            Sigma_true = model.target_object.target(fut)        # (N, N)
+            Sigma_true = model.target_object.target(fut)
         except Exception as e:
             if verbose:
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} true target failed: {e}")
             continue
         Sigma_true = np.asarray(Sigma_true, dtype=float)
-        # print("Sigma_true", np.trace(Sigma_true)/Sigma_true.shape[0])
 
-        # --- Metrics ---
+        # --- Base metrics (your existing ones) ---
         fro = frobenius_error(Sigma_hat, Sigma_true)
+
+        # Ensure SPD for the SPD-geometry metrics
         Sigma_hat = project_to_spd((Sigma_hat + Sigma_hat.T) / 2.0, eps=1e-8)
         Sigma_true = project_to_spd((Sigma_true + Sigma_true.T) / 2.0, eps=1e-8)
 
         kl = gaussian_kl_divergence(S_true=Sigma_true, S_hat=Sigma_hat)
 
-        # Min-var weights built on forecast Σhat, realized variance under Σtrue
+        # --- NEW: Likelihood + SPD-geometry metrics ---
+        try:
+            nll = gaussian_nll_future_window(Sigma_hat=Sigma_hat, fut_returns=fut, eps=1e-10)
+        except Exception:
+            nll = np.nan
+
+        try:
+            stein = stein_loss(S_true=Sigma_true, S_hat=Sigma_hat, eps=1e-10)
+        except Exception:
+            stein = np.nan
+
+        try:
+            logeuc = log_euclidean_distance(S_true=Sigma_true, S_hat=Sigma_hat, eps=1e-10)
+        except Exception:
+            logeuc = np.nan
+
+        # --- NEW: Correlation skill metrics ---
+        try:
+            corr_fro = corr_offdiag_fro(S_true=Sigma_true, S_hat=Sigma_hat)
+        except Exception:
+            corr_fro = np.nan
+
+        try:
+            corr_spear = corr_upper_spearman(S_true=Sigma_true, S_hat=Sigma_hat)
+        except Exception:
+            corr_spear = np.nan
+
+        # --- NEW: Spectrum/conditioning diagnostics ---
+        try:
+            eig_logmse = eigen_log_mse(S_true=Sigma_true, S_hat=Sigma_hat, eps=1e-10)
+        except Exception:
+            eig_logmse = np.nan
+
+        try:
+            cond_hat = condition_number(Sigma_hat, eps=1e-10)
+            cond_true = condition_number(Sigma_true, eps=1e-10)
+            cond_ratio = float(cond_hat / max(cond_true, 1e-12))
+        except Exception:
+            cond_hat, cond_true, cond_ratio = np.nan, np.nan, np.nan
+
+        # --- Portfolio probe (your existing + extra stability) ---
         w = min_variance_weights(Sigma_hat, long_only=long_only)
         pred_var = realized_portfolio_variance(w, Sigma_hat)
         real_var = realized_portfolio_variance(w, Sigma_true)
+
+        # NEW: turnover, concentration
+        if w_prev is None:
+            turnover_l1 = np.nan
+        else:
+            turnover_l1 = float(np.sum(np.abs(w - w_prev)))
+        w_prev = w.copy()
+
+        w_stats = weight_concentration_stats(w)
+
+        # --- NEW: Multi-portfolio risk errors (fixed portfolio set) ---
+        port_err = multi_portfolio_risk_errors(Sigma_hat=Sigma_hat, Sigma_true=Sigma_true, W_eval=W_eval)
 
         rows.append(
             {
                 "date": anchor_date,
                 "raw_anchor": raw_anchor,
+
+                # Existing headline metrics
                 "fro": fro,
                 "kl": kl,
                 "pred_var": pred_var,
                 "real_var": real_var,
+
+                # NEW: probabilistic + SPD geometry
+                "nll": nll,
+                "stein": stein,
+                "logeuc": logeuc,
+
+                # NEW: correlation skill
+                "corr_offdiag_fro": corr_fro,
+                "corr_spearman": corr_spear,
+
+                # NEW: spectrum / conditioning
+                "eig_log_mse": eig_logmse,
+                "cond_hat": cond_hat,
+                "cond_true": cond_true,
+                "cond_ratio": cond_ratio,
+
+                # NEW: portfolio stability diagnostics
+                "turnover_l1": turnover_l1,
+                **w_stats,
+
+                # NEW: multi-portfolio errors
+                **port_err,
             }
         )
 
@@ -241,18 +338,23 @@ def run_backtest(
     out = pd.DataFrame(rows).set_index("date").sort_index()
     return out
 
-
 if __name__ == "__main__":
-    returns_df = pd.read_parquet("data/processed/returns_universe_100.parquet")
+    returns_df = clean_returns_matrix_at_load(
+        parquet_path="data/processed/returns_universe_100.parquet",
+        policy="drop_date",          # safest first pass
+        q99_thresh=0.5,
+        max_thresh=1.0,
+        min_non_nan_frac=0.2,
+    ).T
+    print(returns_df.head())
     returns_df.index = pd.to_datetime(returns_df.index)
-    print(returns_df.shape)
 
     results = run_backtest(
         returns_df=returns_df,
         lookback=60,
-        horizon=20,
+        horizon=30,
         start_date="2018-01-01",
-        end_date="2020-12-31", 
+        end_date="2020-05-31", 
         k_neighbors=50,
         refit_every=20,
         long_only=False,
