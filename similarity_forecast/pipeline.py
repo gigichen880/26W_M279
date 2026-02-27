@@ -75,7 +75,7 @@ class RegimeAwareSimilarityForecaster:
         T = R.shape[0]
         L, H = self.lookback, self.horizon
         out: List[Tuple[int, slice, slice]] = []
-        for anchor in range(L - 1, T - H - 1):
+        for anchor in range(L - 1, T - H):
             past = slice(anchor - L + 1, anchor + 1)
             fut = slice(anchor + 1, anchor + H + 1)
             out.append((anchor, past, fut))

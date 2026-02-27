@@ -6,7 +6,7 @@ from typing import Protocol, Optional
 import numpy as np
 from numpy.typing import NDArray
 
-from .core import cov_from_returns, corr_from_cov
+from .core import cov_from_returns, corr_from_cov, cov_from_returns_filtered, project_to_spd
 
 
 class WindowEmbedder(Protocol):
@@ -35,28 +35,29 @@ class CorrEigenEmbedder:
         T, N = past_returns.shape
         min_periods = max(2, int(T * self.min_periods_ratio))
         try:
-            Sigma = cov_from_returns(past_returns, ddof=self.ddof, min_frac=0.8)
+            Sigma, _ = cov_from_returns_filtered(
+                past_returns,
+                ddof=self.ddof,
+                min_periods=min_periods,
+                min_frac=0.8,
+            )
+            n_eff = Sigma.shape[0]
+            if n_eff < self.k:
+                warnings.warn(
+                    f"CorrEigenEmbedder: only {n_eff} assets after filtering (< k={self.k}); using zero embedding",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return np.zeros(self.k, dtype=float)
+
             C = corr_from_cov(Sigma, eps=self.eps)
-            if np.isnan(C).any():
-                complete_mask = ~np.isnan(past_returns).all(axis=0)
-                n_complete = complete_mask.sum()
-                if n_complete < 10:
-                    warnings.warn(
-                        f"CorrEigenEmbedder: only {n_complete} stocks with data, using zero embedding",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-                    return np.zeros(self.k, dtype=float)
-                X_complete = past_returns[:, complete_mask]
-                Sigma = cov_from_returns(X_complete, ddof=self.ddof, min_periods=min_periods)
-                C = corr_from_cov(Sigma, eps=self.eps)
             w = np.linalg.eigvalsh(C)
             w = np.maximum(w, self.eps)[::-1][: self.k]
             return np.log(w)
+
         except Exception as e:
             warnings.warn(f"Embedding failed: {e}, using zeros", UserWarning, stacklevel=2)
             return np.zeros(self.k, dtype=float)
-
     @property
     def dim(self) -> int:
         return self.k

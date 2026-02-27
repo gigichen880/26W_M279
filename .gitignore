@@ -42,3 +42,5 @@ results/eda/reports/*.parquet
 # Keep these small files
 !data/universes/*.csv
 !data/universes/*.txt
+
+results/
