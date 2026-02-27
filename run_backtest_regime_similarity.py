@@ -17,8 +17,20 @@ from similarity_forecast.core import LogEuclideanSPDMean, validate_window, proje
 from similarity_forecast.regimes import RegimeModel
 from similarity_forecast.pipeline import RegimeAwareSimilarityForecaster
 from similarity_forecast.regime_weighting import RegimeAwareWeights
+import dataclasses
+from numpy.typing import NDArray
 
+@dataclasses.dataclass(frozen=True)
+class ArithmeticSPDMean:
+    """
+    Simple weighted arithmetic mean of SPD matrices, then project to SPD.
+    """
+    eps_spd: float = 1e-8
 
+    def aggregate(self, targets: NDArray[np.floating], w: NDArray[np.floating]) -> NDArray[np.floating]:
+        S = np.tensordot(w, targets, axes=(0, 0))
+        return project_to_spd((S + S.T) / 2.0, eps=self.eps_spd)
+    
 def build_model(
     lookback: int = 60,
     horizon: int = 20,
@@ -38,7 +50,7 @@ def build_model(
         verbose_skip=False,
     )
     target = CovarianceTarget(ddof=ddof)
-    aggregator = LogEuclideanSPDMean(eps_spd=1e-8)
+    aggregator = ArithmeticSPDMean(eps_spd=1e-8)
     regime_model = RegimeModel(n_regimes=n_regimes, random_state=random_state)
     return RegimeAwareSimilarityForecaster(
         embedder=embedder,
@@ -183,7 +195,7 @@ def run_backtest(
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} prediction failed: {e}")
             continue
         Sigma_hat = np.asarray(Sigma_hat, dtype=float)
-        Sigma_hat = project_to_spd(Sigma_hat, eps=1e-8)
+        # print("Sigma_hat", np.trace(Sigma_hat)/Sigma_hat.shape[0])
 
         # --- True Σtrue from realized future window ---
         fut = R[raw_anchor + 1 : raw_anchor + horizon + 1, :]  # (H, N)
@@ -194,10 +206,13 @@ def run_backtest(
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} true target failed: {e}")
             continue
         Sigma_true = np.asarray(Sigma_true, dtype=float)
-        Sigma_true = project_to_spd(Sigma_true, eps=1e-8)
+        # print("Sigma_true", np.trace(Sigma_true)/Sigma_true.shape[0])
 
         # --- Metrics ---
         fro = frobenius_error(Sigma_hat, Sigma_true)
+        Sigma_hat = project_to_spd((Sigma_hat + Sigma_hat.T) / 2.0, eps=1e-8)
+        Sigma_true = project_to_spd((Sigma_true + Sigma_true.T) / 2.0, eps=1e-8)
+
         kl = gaussian_kl_divergence(S_true=Sigma_true, S_hat=Sigma_hat)
 
         # Min-var weights built on forecast Σhat, realized variance under Σtrue

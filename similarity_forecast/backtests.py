@@ -19,88 +19,58 @@ def frobenius_error(S_hat: NDArray[np.floating], S_true: NDArray[np.floating]) -
         raise ValueError(f"Shape mismatch: S_hat {S_hat.shape} vs S_true {S_true.shape}")
     return float(np.linalg.norm(S_hat - S_true, ord="fro"))
 
+import numpy as np
 
-def gaussian_kl_divergence(
-    S_true: NDArray[np.floating],
-    S_hat: NDArray[np.floating],
-    eps: float = 1e-10,
-) -> float:
+def gaussian_kl_divergence(S_true: np.ndarray, S_hat: np.ndarray, eps: float = 1e-10) -> float:
     """
-    Gaussian KL divergence D_KL(N(0, S_true) || N(0, S_hat)).
+    KL( N(0, S_true) || N(0, S_hat) ) = 0.5 * ( tr(S_hat^{-1} S_true) - n + logdet(S_hat) - logdet(S_true) )
 
-    Formula:
-        0.5 * ( tr(S_hat^{-1} S_true) - log det(S_hat^{-1} S_true) - N )
-
-    Args:
-        S_true: (N, N) realized covariance (SPD)
-        S_hat:  (N, N) forecast covariance (SPD)
-        eps: small jitter added to diagonals for numerical stability
-
-    Returns:
-        KL divergence (scalar, >= 0 up to numerical error)
+    Uses slogdet (stable) and solve (stable). Assumes inputs are SPD; if near-singular, add eps*I.
     """
     S_true = np.asarray(S_true, dtype=float)
     S_hat = np.asarray(S_hat, dtype=float)
-    if S_true.shape != S_hat.shape:
-        raise ValueError(f"Shape mismatch: S_true {S_true.shape} vs S_hat {S_hat.shape}")
-    if S_true.ndim != 2 or S_true.shape[0] != S_true.shape[1]:
-        raise ValueError(f"Expected square matrices, got {S_true.shape}")
+    n = S_true.shape[0]
 
-    N = S_true.shape[0]
-    I = np.eye(N, dtype=float)
+    # Symmetrize
+    S_true = (S_true + S_true.T) / 2.0
+    S_hat = (S_hat + S_hat.T) / 2.0
 
-    # Stabilize (helps if near-singular due to numerical issues)
+    # Jitter for numerical stability
+    I = np.eye(n)
     S_true_j = S_true + eps * I
     S_hat_j = S_hat + eps * I
 
-    # Use solve instead of explicit inverse
-    # M = S_hat^{-1} S_true
-    M = np.linalg.solve(S_hat_j, S_true_j)
+    sign_t, logdet_t = np.linalg.slogdet(S_true_j)
+    sign_h, logdet_h = np.linalg.slogdet(S_hat_j)
+    if sign_t <= 0 or sign_h <= 0:
+        raise ValueError("slogdet sign <= 0; matrices not SPD even after jitter.")
 
-    tr_term = float(np.trace(M))
+    # trace(S_hat^{-1} S_true)
+    X = np.linalg.solve(S_hat_j, S_true_j)
+    tr_term = float(np.trace(X))
 
-    # logdet(M) via slogdet for stability
-    sign, logdet = np.linalg.slogdet(M)
-    if sign <= 0:
-        # If numerical issues cause non-positive determinant, jitter more
-        M = np.linalg.solve(S_hat_j + 10 * eps * I, S_true_j + 10 * eps * I)
-        sign, logdet = np.linalg.slogdet(M)
-        if sign <= 0:
-            raise ValueError("Non-positive determinant encountered in KL computation; matrices may not be SPD.")
-
-    return float(0.5 * (tr_term - logdet - N))
-
+    return 0.5 * (tr_term - n + (logdet_h - logdet_t))
 
 def min_variance_weights(
     Sigma_hat: NDArray[np.floating],
     long_only: bool = False,
-    eps: float = 1e-10,
+    ridge: float = 0.05,          # 5% ridge relative to avg variance
+    eps_spd: float = 1e-12,
 ) -> NDArray[np.floating]:
-    """
-    Compute minimum-variance portfolio weights under budget constraint 1^T w = 1.
-
-    Unconstrained (allows shorting):
-        w* = Sigma^{-1} 1 / (1^T Sigma^{-1} 1)
-
-    Args:
-        Sigma_hat: (N, N) forecast covariance (SPD recommended)
-        long_only: if True, projects negative weights to 0 and renormalizes (heuristic)
-                  (proper long-only requires QP; this is a simple fallback)
-        eps: diagonal jitter for stability
-
-    Returns:
-        w: (N,) weights summing to 1
-    """
     Sigma_hat = np.asarray(Sigma_hat, dtype=float)
-    if Sigma_hat.ndim != 2 or Sigma_hat.shape[0] != Sigma_hat.shape[1]:
-        raise ValueError(f"Expected square matrix, got {Sigma_hat.shape}")
-
     N = Sigma_hat.shape[0]
     I = np.eye(N, dtype=float)
-    Sigma_j = Sigma_hat + eps * I
+
+    # symmetrize
+    S = (Sigma_hat + Sigma_hat.T) / 2.0
+
+    # scale-aware ridge (huge difference vs eps=1e-10)
+    avg_var = float(np.trace(S)) / N
+    avg_var = max(avg_var, eps_spd)
+    S = S + ridge * avg_var * I
 
     ones = np.ones(N, dtype=float)
-    x = np.linalg.solve(Sigma_j, ones)          # Sigma^{-1} 1
+    x = np.linalg.solve(S, ones)
     denom = float(ones @ x)
     if not np.isfinite(denom) or abs(denom) < 1e-20:
         raise ValueError("Degenerate min-var solution: 1^T Sigma^{-1} 1 is near zero.")
@@ -110,14 +80,9 @@ def min_variance_weights(
     if long_only:
         w = np.maximum(w, 0.0)
         s = float(w.sum())
-        if s <= 0:
-            # fallback to equal weight if projection kills everything
-            w = np.full(N, 1.0 / N, dtype=float)
-        else:
-            w = w / s
+        w = (np.full(N, 1.0 / N) if s <= 0 else w / s)
 
     return w.astype(float)
-
 
 def realized_portfolio_variance(
     w: NDArray[np.floating],
