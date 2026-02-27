@@ -200,8 +200,10 @@ class HybridStateEmbedder:
     
 import numpy as np
 import pandas as pd
+
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+
 
 class PCAWindowEmbedder:
     """
@@ -214,6 +216,7 @@ class PCAWindowEmbedder:
       - log singular values (k)
       - time-score mean/std (k each)
     """
+
     def __init__(
         self,
         lookback: int,
@@ -221,10 +224,9 @@ class PCAWindowEmbedder:
         center_by_asset: bool = True,
         use_scaler: bool = True,
         eps: float = 1e-12,
-        # to mirror your validation behavior during fit:
         validate_window_fn=None,
-        max_window_na_pct: float = 0.0,
-        min_stocks_with_data_pct: float = 1.0,
+        max_window_na_pct: float = 0.3,
+        min_stocks_with_data_pct: float = 0.8,
         verbose_skip: bool = False,
     ):
         self.lookback = int(lookback)
@@ -234,9 +236,9 @@ class PCAWindowEmbedder:
         self.eps = float(eps)
 
         self.validate_window_fn = validate_window_fn
-        self.max_window_na_pct = max_window_na_pct
-        self.min_stocks_with_data_pct = min_stocks_with_data_pct
-        self.verbose_skip = verbose_skip
+        self.max_window_na_pct = float(max_window_na_pct)
+        self.min_stocks_with_data_pct = float(min_stocks_with_data_pct)
+        self.verbose_skip = bool(verbose_skip)
 
         self.scaler_ = None
         self.pca_ = None
@@ -244,8 +246,12 @@ class PCAWindowEmbedder:
         self.N_ = None
 
     def _prep_window(self, X: np.ndarray) -> np.ndarray:
+        """
+        Optional per-asset centering. IMPORTANT: X is assumed finite already.
+        """
         X = np.asarray(X, dtype=float)
         if self.center_by_asset:
+            # center each asset over time
             X = X - X.mean(axis=0, keepdims=True)
         return X
 
@@ -260,23 +266,40 @@ class PCAWindowEmbedder:
             past = R[anchor - L : anchor]
             yield anchor, past
 
+    def _validate(self, X: np.ndarray) -> bool:
+        """
+        Apply provided validate_window_fn if present.
+        """
+        if self.validate_window_fn is None:
+            return True
+        return bool(
+            self.validate_window_fn(
+                returns_window=X,
+                max_na_pct=self.max_window_na_pct,
+                min_stocks_pct=self.min_stocks_with_data_pct,
+            )
+        )
+
     def _impute_window(self, X: np.ndarray) -> np.ndarray:
         """
         Window-local imputation (no lookahead):
+        - replace non-finite with NaN
         - fill NaNs in each column with that column's mean within the window
-        - if a column is all-NaN in the window, fill with 0
-        - also replace +/-inf with 0
+        - if a column is all-NaN in the window, fill with 0 (but such windows
+          should typically have been rejected by validation)
+        - replace remaining NaN/inf with 0
         """
         X = np.asarray(X, dtype=float)
         X = np.where(np.isfinite(X), X, np.nan)
 
-        col_mean = np.nanmean(X, axis=0)          # (N,)
+        # column means ignoring NaNs; if all-NaN -> NaN
+        col_mean = np.nanmean(X, axis=0)  # (N,)
         col_mean = np.where(np.isfinite(col_mean), col_mean, 0.0)
 
-        # fill NaNs
-        inds = np.where(np.isnan(X))
-        if inds[0].size > 0:
-            X[inds] = col_mean[inds[1]]
+        # fill NaNs with column mean
+        nan_i, nan_j = np.where(np.isnan(X))
+        if nan_i.size > 0:
+            X[nan_i, nan_j] = col_mean[nan_j]
 
         # ensure finite
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
@@ -292,13 +315,29 @@ class PCAWindowEmbedder:
 
         for anchor, past in self._build_past_windows_only(R):
             total += 1
-            # For PCA fit: DO NOT skip; impute instead.
+
+            # Skip low-quality windows so PCA isn't trained on junk / sparse windows
+            if not self._validate(past):
+                skipped += 1
+                if self.verbose_skip and skipped <= 5:
+                    na_pct = np.isnan(past).sum() / past.size
+                    stocks_pct = (~np.isnan(past).all(axis=0)).mean()
+                    times_pct = (~np.isnan(past).all(axis=1)).mean()
+                    print(
+                        f"[PCA fit skip] anchor={anchor} "
+                        f"na_pct={na_pct:.3f} stocks_pct={stocks_pct:.3f} times_pct={times_pct:.3f}"
+                    )
+                continue
+
             past = self._impute_window(past)
             past = self._prep_window(past)
             X_list.append(past.reshape(-1))
 
         if not X_list:
-            raise ValueError("PCAWindowEmbedder.fit: no valid windows to fit PCA on.")
+            raise ValueError(
+                "PCAWindowEmbedder.fit: no valid windows to fit PCA on. "
+                "Try relaxing max_window_na_pct / min_stocks_with_data_pct."
+            )
 
         X_flat = np.stack(X_list, axis=0)  # [M, L*N]
 
@@ -309,8 +348,8 @@ class PCAWindowEmbedder:
         self.pca_ = PCA(n_components=max(self.k, 1), svd_solver="randomized")
         self.pca_.fit(X_flat)
 
-        if skipped and self.verbose_skip:
-            print(f"[PCA fit] Skipped {skipped} / {total} windows due to data quality.")
+        if self.verbose_skip:
+            print(f"[PCA fit] used={len(X_list)} skipped={skipped} total={total}")
 
         return self
 
@@ -323,6 +362,16 @@ class PCAWindowEmbedder:
         if self.L_ is not None and (L != self.L_ or N != self.N_):
             raise ValueError(f"PCAWindowEmbedder.embed: expected ({self.L_},{self.N_}), got ({L},{N})")
 
+        # Reject low-quality windows at inference time too (prevents empty-slice issues)
+        if not self._validate(past):
+            na_pct = np.isnan(past).sum() / past.size
+            stocks_pct = (~np.isnan(past).all(axis=0)).mean()
+            times_pct = (~np.isnan(past).all(axis=1)).mean()
+            raise ValueError(
+                f"PCAWindowEmbedder.embed: window failed validation "
+                f"(na_pct={na_pct:.3f}, stocks_pct={stocks_pct:.3f}, times_pct={times_pct:.3f})"
+            )
+
         Xw = self._impute_window(past)
         Xw = self._prep_window(Xw)
 
@@ -333,7 +382,7 @@ class PCAWindowEmbedder:
         pc_coords = self.pca_.transform(x_flat).ravel()
         k = min(self.k, pc_coords.shape[0])
 
-        # (2) within-window SVD features (factor strength + concentration + dynamics)
+        # (2) within-window SVD features
         U, S, Vt = np.linalg.svd(Xw, full_matrices=False)
         k2 = min(self.k, S.shape[0])
 
@@ -346,8 +395,8 @@ class PCAWindowEmbedder:
         score_mean = scores.mean(axis=0)
         score_std = scores.std(axis=0, ddof=1)
 
-        # pad if k2 < k (rare unless L very small)
         def pad_to(x, K):
+            x = np.asarray(x, dtype=float).ravel()
             if x.shape[0] == K:
                 return x
             out = np.zeros(K, dtype=float)

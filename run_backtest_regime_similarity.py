@@ -63,8 +63,8 @@ class ArithmeticSPDMean:
 def build_model(
     lookback: int = 60,
     horizon: int = 20,
-    n_regimes: int = 4,
-    tau: float = 5.0,
+    n_regimes: int = 8,
+    tau: float = 2.0,
     k_eigs: int = 32,
     ddof: int = 1,
     random_state: int = 0,
@@ -72,10 +72,10 @@ def build_model(
     # embedder = CorrEigenEmbedder(k=k_eigs)
     embedder = PCAWindowEmbedder(
         lookback=lookback,
-        k=5,
-        validate_window_fn=validate_window,  # reuse yours
-        max_window_na_pct=0.0,
-        min_stocks_with_data_pct=1.0,
+        k=10,
+        validate_window_fn=validate_window, 
+        max_window_na_pct=0.3,
+        min_stocks_with_data_pct=0.8,
         verbose_skip=False,
     )
     target = CovarianceTarget(ddof=ddof)
@@ -219,6 +219,11 @@ def run_backtest(
         Sigma_hat = np.asarray(Sigma_hat, dtype=float)
 
         fut = R[raw_anchor + 1 : raw_anchor + horizon + 1, :]  # (H, N)
+        if not validate_window(fut, max_na_pct=0.3, min_stocks_pct=0.8):
+            if verbose:
+                print(f"[skip] {anchor_date.date()} future window failed validation")
+            continue
+        
         try:
             Sigma_true = model.target_object.target(fut)
         except Exception as e:
@@ -290,7 +295,7 @@ def run_backtest(
 
         w_stats = weight_concentration_stats(w)
 
-        # --- NEW: Multi-portfolio risk errors (fixed portfolio set) ---
+        # --- Multi-portfolio risk errors (fixed portfolio set) ---
         port_err = multi_portfolio_risk_errors(Sigma_hat=Sigma_hat, Sigma_true=Sigma_true, W_eval=W_eval)
 
         rows.append(
@@ -298,32 +303,31 @@ def run_backtest(
                 "date": anchor_date,
                 "raw_anchor": raw_anchor,
 
-                # Existing headline metrics
                 "fro": fro,
                 "kl": kl,
                 "pred_var": pred_var,
                 "real_var": real_var,
 
-                # NEW: probabilistic + SPD geometry
+                # probabilistic + SPD geometry
                 "nll": nll,
                 "stein": stein,
                 "logeuc": logeuc,
 
-                # NEW: correlation skill
+                # correlation skill
                 "corr_offdiag_fro": corr_fro,
                 "corr_spearman": corr_spear,
 
-                # NEW: spectrum / conditioning
+                # spectrum / conditioning
                 "eig_log_mse": eig_logmse,
                 "cond_hat": cond_hat,
                 "cond_true": cond_true,
                 "cond_ratio": cond_ratio,
 
-                # NEW: portfolio stability diagnostics
+                # portfolio stability diagnostics
                 "turnover_l1": turnover_l1,
                 **w_stats,
 
-                # NEW: multi-portfolio errors
+                # multi-portfolio errors
                 **port_err,
             }
         )
@@ -352,12 +356,12 @@ def main():
 
     results = run_backtest(
         returns_df=returns_df,
-        lookback=60,
+        lookback=40,
         horizon=30,
         start_date="2017-01-01",
         end_date="2022-05-31",
-        k_neighbors=50,
-        refit_every=20,
+        k_neighbors=10,
+        refit_every=5,
         long_only=False,
         verbose=True,
     )
@@ -383,6 +387,37 @@ def main():
         if key in results.columns:
             print(f"\n===== WORST 5 by {key} =====")
             print(results[[key]].sort_values(key, ascending=False).head(5))
+
+    # ----------------------------
+    # Portfolio calibration summary (GMVP)
+    # ----------------------------
+    if "pred_var" in results.columns and "real_var" in results.columns:
+        tmp = results[["pred_var", "real_var"]].replace([np.inf, -np.inf], np.nan).dropna()
+        if len(tmp) > 5:
+            ratio = tmp["real_var"] / np.maximum(tmp["pred_var"], 1e-12)
+            print("\n===== PORTFOLIO (GMVP) CALIBRATION =====")
+            print("n =", len(tmp))
+            print("real/pred ratio: mean =", float(ratio.mean()),
+                  "median =", float(ratio.median()),
+                  "p90 =", float(ratio.quantile(0.90)),
+                  "p99 =", float(ratio.quantile(0.99)))
+            print("corr(pred_var, real_var) =", float(tmp["pred_var"].corr(tmp["real_var"])))
+
+    # ----------------------------
+    # Multi-portfolio risk errors summary
+    # ----------------------------
+    multi_cols = [c for c in ["port_mse_var", "port_mse_logvar", "port_mae_logvar"] if c in results.columns]
+    if multi_cols:
+        print("\n===== PORTFOLIO (MULTI) RISK ERRORS =====")
+        print(results[multi_cols].describe())
+
+    # ----------------------------
+    # Portfolio stability summary
+    # ----------------------------
+    stab_cols = [c for c in ["turnover_l1", "w_hhi", "w_max_abs", "w_l1"] if c in results.columns]
+    if stab_cols:
+        print("\n===== PORTFOLIO STABILITY =====")
+        print(results[stab_cols].describe())
 
     # ----------------------------
     # Save

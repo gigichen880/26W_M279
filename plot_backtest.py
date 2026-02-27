@@ -9,7 +9,8 @@
 #
 # Notes:
 # - Uses matplotlib only (no seaborn).
-# - Produces time-series, rolling summaries, distributions, and key scatter plots.
+# - Produces time-series, rolling summaries, distributions, scatter plots,
+#   and portfolio calibration diagnostics.
 
 from __future__ import annotations
 
@@ -60,6 +61,9 @@ def plot_timeseries(df: pd.DataFrame, outdir: str) -> None:
         ("cond_ratio", "Condition number ratio (hat/true)"),
         ("turnover_l1", "Min-var turnover L1"),
         ("port_mse_logvar", "Multi-port MSE log(var)"),
+        ("port_mae_logvar", "Multi-port MAE log(var)"),
+        ("w_hhi", "GMVP weight concentration (HHI)"),
+        ("w_max_abs", "GMVP max abs weight"),
     ]
     panels = [(c, t) for (c, t) in panels if c in df.columns]
 
@@ -71,14 +75,15 @@ def plot_timeseries(df: pd.DataFrame, outdir: str) -> None:
     fig = plt.figure(figsize=(12, 2.2 * n))
     for i, (col, title) in enumerate(panels, start=1):
         ax = fig.add_subplot(n, 1, i)
-        s = df[col].astype(float)
+        s = df[col].astype(float).replace([np.inf, -np.inf], np.nan)
 
         ax.plot(s.index, s.values)
         ax.set_title(title)
 
-        # Heavy-tailed: show log10 where appropriate (only if positive)
-        if col in {"kl", "nll", "corr_offdiag_fro", "logeuc", "port_mse_logvar"}:
-            if np.all(np.isfinite(s.values)) and np.nanmin(s.values) > 0:
+        # Heavy-tailed: show log scale where appropriate (only if strictly positive)
+        if col in {"kl", "nll", "corr_offdiag_fro", "logeuc", "port_mse_logvar", "port_mae_logvar"}:
+            vals = s.values
+            if np.nanmin(vals) > 0:
                 ax.set_yscale("log")
 
         ax.grid(True, alpha=0.3)
@@ -86,7 +91,7 @@ def plot_timeseries(df: pd.DataFrame, outdir: str) -> None:
 
 
 def plot_rolling(df: pd.DataFrame, outdir: str, window: int = 21) -> None:
-    cols = [c for c in ["fro", "kl", "nll", "logeuc", "corr_spearman", "turnover_l1"] if c in df.columns]
+    cols = [c for c in ["fro", "kl", "nll", "logeuc", "corr_spearman", "turnover_l1", "port_mse_logvar"] if c in df.columns]
     if not cols:
         return
 
@@ -95,10 +100,11 @@ def plot_rolling(df: pd.DataFrame, outdir: str, window: int = 21) -> None:
     fig = plt.figure(figsize=(12, 2.2 * len(cols)))
     for i, c in enumerate(cols, start=1):
         ax = fig.add_subplot(len(cols), 1, i)
-        ax.plot(df.index, df[c].values, alpha=0.25, label=c)
+        raw = df[c].replace([np.inf, -np.inf], np.nan).astype(float)
+        ax.plot(df.index, raw.values, alpha=0.25, label=c)
         ax.plot(roll.index, roll[c].values, linewidth=2.0, label=f"{window}d rolling median")
         ax.set_title(f"{c}: raw + {window}d rolling median")
-        if c in {"kl", "nll", "logeuc"} and np.nanmin(df[c].values) > 0:
+        if c in {"kl", "nll", "logeuc", "port_mse_logvar"} and np.nanmin(raw.values) > 0:
             ax.set_yscale("log")
         ax.grid(True, alpha=0.3)
         ax.legend(loc="best")
@@ -106,7 +112,13 @@ def plot_rolling(df: pd.DataFrame, outdir: str, window: int = 21) -> None:
 
 
 def plot_distributions(df: pd.DataFrame, outdir: str) -> None:
-    cols = [c for c in ["fro", "kl", "nll", "logeuc", "corr_spearman", "turnover_l1", "w_hhi", "w_max_abs"] if c in df.columns]
+    cols = [c for c in [
+        "fro", "kl", "nll", "logeuc",
+        "corr_spearman", "turnover_l1",
+        "pred_var", "real_var",
+        "port_mse_var", "port_mse_logvar", "port_mae_logvar",
+        "w_hhi", "w_max_abs"
+    ] if c in df.columns]
     if not cols:
         return
 
@@ -123,7 +135,6 @@ def plot_distributions(df: pd.DataFrame, outdir: str) -> None:
         ax.set_title(f"Distribution: {c} (n={x.size})")
         ax.grid(True, alpha=0.3)
 
-        # helpful vertical lines
         q = np.quantile(x, [0.5, 0.9, 0.99])
         for qq in q:
             ax.axvline(qq, linestyle="--", alpha=0.6)
@@ -156,7 +167,6 @@ def plot_scatter(df: pd.DataFrame, outdir: str) -> None:
         plt.title(f"{ycol} vs {xcol} (n={len(sub)})")
         plt.grid(True, alpha=0.3)
 
-        # log axes when it makes sense
         if ycol in {"kl", "nll", "logeuc", "port_mse_logvar"} and np.nanmin(sub[ycol].values) > 0:
             plt.yscale("log")
         if xcol in {"kl", "nll", "logeuc", "port_mse_logvar"} and np.nanmin(sub[xcol].values) > 0:
@@ -180,6 +190,71 @@ def plot_worst_dates(df: pd.DataFrame, outdir: str, metric: str, topk: int = 10)
     plt.title(f"Worst {topk} dates by {metric}")
     plt.grid(True, axis="y", alpha=0.3)
     _savefig(os.path.join(outdir, f"worst_{topk}_{metric}.png"))
+
+
+# ----------------------------
+# NEW: Portfolio calibration plots
+# ----------------------------
+def plot_portfolio_calibration(df: pd.DataFrame, outdir: str) -> None:
+    if "pred_var" not in df.columns or "real_var" not in df.columns:
+        return
+
+    sub = df[["pred_var", "real_var"]].replace([np.inf, -np.inf], np.nan).dropna()
+    if len(sub) < 10:
+        return
+
+    pred = sub["pred_var"].astype(float).values
+    real = sub["real_var"].astype(float).values
+
+    # Time series: predicted vs realized GMVP variance
+    plt.figure(figsize=(12, 4))
+    plt.plot(sub.index, pred, label="pred_var")
+    plt.plot(sub.index, real, label="real_var")
+    plt.title("GMVP variance: predicted vs realized")
+    plt.grid(True, alpha=0.3)
+    plt.legend(loc="best")
+    _savefig(os.path.join(outdir, "gmvp_pred_vs_real_timeseries.png"))
+
+    # Risk ratio time series: real/pred
+    ratio = real / np.maximum(pred, 1e-12)
+    plt.figure(figsize=(12, 4))
+    plt.plot(sub.index, ratio)
+    plt.axhline(1.0, linestyle="--", alpha=0.7)
+    plt.title("GMVP risk ratio: real_var / pred_var (1.0 = perfect)")
+    plt.grid(True, alpha=0.3)
+    _savefig(os.path.join(outdir, "gmvp_risk_ratio_timeseries.png"))
+
+    # Calibration scatter: real vs pred (log-log if positive)
+    plt.figure(figsize=(6.5, 6))
+    plt.scatter(pred, real, s=12, alpha=0.6)
+    lo = float(np.nanmin([pred.min(), real.min()]))
+    hi = float(np.nanmax([pred.max(), real.max()]))
+    plt.plot([lo, hi], [lo, hi], linestyle="--", alpha=0.7)
+    plt.xlabel("pred_var")
+    plt.ylabel("real_var")
+    plt.title(f"GMVP calibration scatter (n={len(sub)})")
+    plt.grid(True, alpha=0.3)
+    if lo > 0:
+        plt.xscale("log")
+        plt.yscale("log")
+    _savefig(os.path.join(outdir, "gmvp_calibration_scatter.png"))
+
+
+def plot_portfolio_diagnostics(df: pd.DataFrame, outdir: str) -> None:
+    cols = [c for c in ["port_mse_var", "port_mse_logvar", "port_mae_logvar", "turnover_l1", "w_hhi", "w_max_abs"] if c in df.columns]
+    if not cols:
+        return
+
+    fig = plt.figure(figsize=(12, 2.2 * len(cols)))
+    for i, c in enumerate(cols, start=1):
+        ax = fig.add_subplot(len(cols), 1, i)
+        s = df[c].replace([np.inf, -np.inf], np.nan).astype(float)
+        ax.plot(s.index, s.values)
+        ax.set_title(c)
+        if c in {"port_mse_var", "port_mse_logvar", "port_mae_logvar"} and np.nanmin(s.values) > 0:
+            ax.set_yscale("log")
+        ax.grid(True, alpha=0.3)
+    _savefig(os.path.join(outdir, "portfolio_diagnostics_timeseries.png"))
 
 
 def main():
@@ -206,6 +281,10 @@ def main():
     plot_distributions(df, args.outdir)
     plot_scatter(df, args.outdir)
 
+    # Portfolio visuals
+    plot_portfolio_calibration(df, args.outdir)
+    plot_portfolio_diagnostics(df, args.outdir)
+
     # Worst-date bar charts for key metrics
     for m in ["kl", "nll", "logeuc", "corr_offdiag_fro", "port_mse_logvar", "turnover_l1"]:
         plot_worst_dates(df, args.outdir, metric=m, topk=10)
@@ -217,6 +296,10 @@ def main():
     print("  distributions.png")
     print("  scatter_*.png")
     print("  worst_10_*.png")
+    print("  gmvp_pred_vs_real_timeseries.png")
+    print("  gmvp_risk_ratio_timeseries.png")
+    print("  gmvp_calibration_scatter.png")
+    print("  portfolio_diagnostics_timeseries.png")
 
 
 if __name__ == "__main__":
