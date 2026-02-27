@@ -300,18 +300,106 @@ For returns we avoid imputation (forward-fill, mean, zero) because:
 
 We use pairwise-complete observations and window validation instead, which is standard for real financial data.
 
-
 ## Key Results (EDA Phase)
 
 - Extracted 515 stocks from minutely data.
 - Selected 100 high-quality stocks (~98.5% availability).
 - Includes 18 mega-caps: AAPL, MSFT, GOOGL, AMZN, NVDA, META/FB, NFLX, JPM, BAC, WFC, JNJ, PFE, UNH, WMT, HD, V, MA, NKE.
 
+Here’s a **drop-in README section** you can paste (I’d place it right after “Main Pipeline” / “Outputs”, before “Handling Missing Data”). It’s intentionally not too detailed but names the metrics you’re already computing.
+
+## Evaluation
+
+We evaluate covariance forecasts in a walk-forward backtest (no look-ahead bias).
+At each anchor date `t`, the model predicts a covariance matrix `Sigma_hat_t` using only the past `L` days, and is scored against the realized covariance `Sigma_t` computed from the next `H` days.
+
+### Metrics
+
+We report a mix of matrix accuracy, probabilistic scoring, correlation skill, and portfolio usefulness.
+
+---
+
+### Matrix Errors
+
+* **`fro`** — Frobenius norm
+  || Sigma_hat_t − Sigma_t ||_F
+
+* **`kl`** — Gaussian KL divergence
+  KL( N(0, Sigma_t) || N(0, Sigma_hat_t) )
+
+* **`stein`** — Stein loss
+  tr(Sigma_hat^{-1} Sigma) − log det(Sigma_hat^{-1} Sigma) − N
+
+---
+
+### Predictive Likelihood
+
+* **`nll`** — Gaussian negative log-likelihood of realized future returns
+  Average over horizon days of:
+  0.5 * ( log det(Sigma_hat_t) + r' Sigma_hat_t^{-1} r )
+
+This evaluates how well the forecast explains actual realized returns.
+
+---
+
+### SPD / Spectral Structure
+
+* **`logeuc`** — Log-Euclidean distance
+  || log(Sigma_hat_t) − log(Sigma_t) ||_F
+
+* **`eig_log_mse`** — Mean squared error between log eigenvalues
+
+* **`cond_ratio`** — Condition number ratio
+  cond(Sigma_hat_t) / cond(Sigma_t)
+
+These capture structural and conditioning differences between covariance matrices.
+
+---
+
+### Correlation Structure
+
+* **`corr_offdiag_fro`** — Frobenius error on off-diagonal entries of correlation matrices
+
+* **`corr_spearman`** — Spearman rank correlation between upper-triangle correlation entries
+
+These isolate correlation forecasting skill separately from volatility scale.
+
+---
+
+### Portfolio-Based Evaluation
+
+* **`pred_var` / `real_var`**
+  Predicted vs realized variance of the ridge-regularized Global Minimum Variance Portfolio (GMVP).
+
+* **`port_mse_logvar`**
+  Mean squared error of log variance across a fixed set of evaluation portfolios
+  (equal-weight + random long-only portfolios).
+
+* **Stability diagnostics**
+
+  * `turnover_l1` — L1 turnover of GMVP weights
+  * `w_hhi` — Herfindahl concentration index
+  * `w_max_abs` — Maximum absolute weight
+
+---
+
+### Running Evaluation & Plots
+
+```bash
+# Run backtest (writes results/*.csv and results/*.parquet)
+python run_backtest_regime_similarity.py
+
+# Visualize results
+python scripts/plot_backtest.py \
+  --csv results/regime_similarity_backtest.csv \
+  --outdir results/figs_regime_similarity
+```
+
 ## Next Steps
 
-1. Implement similarity-based forecasting pipeline.
-2. SPD geometry (log-Euclidean representations).
-3. Regime detection.
+1. Implement similarity-based forecasting pipeline (Done)
+2. SPD geometry (log-Euclidean representations) (Done)
+3. Regime detection (Done)
 4. GMVP backtesting.
 5. Comparison vs baselines (HAR, DCC-GARCH, Ledoit-Wolf).
 
