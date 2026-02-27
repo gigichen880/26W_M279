@@ -6,7 +6,7 @@ from typing import Protocol
 import numpy as np
 from numpy.typing import NDArray
 
-from .core import cov_from_returns, corr_from_cov, project_to_spd
+from .core import cov_from_returns, cov_from_returns_filtered, corr_from_cov, project_to_spd
 
 
 class TargetObject(Protocol):
@@ -36,7 +36,7 @@ class CovarianceTarget:
         min_periods = max(2, int(T * self.min_periods_ratio))
         cov = cov_from_returns(future_returns, ddof=self.ddof, min_periods=min_periods)
         return project_to_spd(cov, eps=self.eps_spd)
-
+    
     def postprocess(self, y_hat: NDArray[np.floating]) -> NDArray[np.floating]:
         return project_to_spd(y_hat, eps=self.eps_spd)
 

@@ -45,6 +45,44 @@ def expm_sym(A: NDArray[np.floating]) -> NDArray[np.floating]:
     w, V = np.linalg.eigh(A)
     return (V * np.exp(w)) @ V.T
 
+import warnings
+from typing import Optional, Tuple
+from numpy.typing import NDArray
+from typing import Tuple
+
+def cov_from_returns_filtered(
+    R: NDArray[np.floating],
+    ddof: int = 1,
+    min_periods: Optional[int] = None,
+    min_frac: float = 0.8,
+    ridge: float = 1e-8,
+) -> Tuple[NDArray[np.floating], NDArray[np.bool_]]:
+    """
+    Window-wise filter assets then compute covariance on the kept subset.
+    Returns: (cov_small, mask)
+    """
+    T, N = R.shape
+    if min_periods is None:
+        min_periods = max(2, int(np.ceil(min_frac * T)))
+
+    obs = np.sum(~np.isnan(R), axis=0)
+    mask = obs >= min_periods
+    if mask.sum() < 2:
+        raise ValueError(f"Not enough assets with >= {min_periods} obs (kept {mask.sum()} / {N}).")
+
+    X = R[:, mask].astype(float)
+    good_rows = ~np.isnan(X).any(axis=1)
+    X = X[good_rows]
+    T_eff = X.shape[0]
+    if T_eff <= ddof:
+        raise ValueError(f"Not enough complete rows after filtering (T_eff={T_eff}, ddof={ddof}).")
+
+    X = X - X.mean(axis=0, keepdims=True)
+    cov = (X.T @ X) / max(1, T_eff - ddof)
+    cov = cov + ridge * np.eye(cov.shape[0], dtype=float)
+
+    cov = project_to_spd(cov)
+    return cov.astype(float), mask
 
 def cov_from_returns(
     R: NDArray[np.floating],
@@ -52,43 +90,38 @@ def cov_from_returns(
     min_periods: Optional[int] = None,
 ) -> NDArray[np.floating]:
     """
-    Compute covariance from returns matrix, handling NAs gracefully.
+    Fixed-shape covariance from returns.
 
-    Args:
-        R: (T, N) array of returns (can contain NaNs)
-        ddof: delta degrees of freedom (default 1)
-        min_periods: minimum number of overlapping observations required
-            (default: max(2, T//2), i.e. need 50% overlap when NAs present)
-
-    Returns:
-        (N, N) covariance matrix (projected to SPD)
+    R: (T, N) with NaNs allowed.
+    Returns: (N, N) covariance (SPD-projected). Always NxN.
     """
     T, N = R.shape
     if min_periods is None:
         min_periods = max(2, T // 2)
 
-    has_na = np.isnan(R).any()
-    if not has_na:
-        # No NAs: simple path
-        X = R - np.nanmean(R, axis=0, keepdims=True)
+    if not np.isnan(R).any():
+        X = R - R.mean(axis=0, keepdims=True)
         denom = max(1, T - ddof)
-        cov_matrix = (X.T @ X) / denom
+        cov = (X.T @ X) / denom
     else:
+        # pairwise-complete covariance, always NxN
         df = pd.DataFrame(R)
-        cov_matrix = df.cov(min_periods=min_periods, ddof=ddof).values
+        cov = df.cov(min_periods=min_periods, ddof=ddof).to_numpy()
 
-    if np.isnan(cov_matrix).any():
-        n_valid = int((~np.isnan(cov_matrix)).sum())
-        warnings.warn(
-            f"Covariance has NaNs. Only {n_valid} / {N * N} entries valid. "
-            "Consider increasing min_periods or filtering stocks.",
-            UserWarning,
-            stacklevel=2,
-        )
+        if np.isnan(cov).any():
+            n_valid = int((~np.isnan(cov)).sum())
+            warnings.warn(
+                f"Covariance has NaNs. Only {n_valid} / {N*N} entries valid. "
+                f"Filling remaining with 0 then SPD-projecting. "
+                f"(Try increasing min_periods or filtering assets/windows.)",
+                UserWarning,
+                stacklevel=2,
+            )
 
-    cov_matrix = project_to_spd(np.nan_to_num(cov_matrix, nan=0.0, posinf=0.0, neginf=0.0))
-    return cov_matrix.astype(float)
+        cov = np.nan_to_num(cov, nan=0.0, posinf=0.0, neginf=0.0)
 
+    cov = project_to_spd(cov)
+    return cov.astype(float)
 
 def corr_from_cov(Sigma: NDArray[np.floating], eps: float = 1e-12) -> NDArray[np.floating]:
     d = np.sqrt(np.maximum(np.diag(Sigma), eps))

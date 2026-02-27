@@ -35,7 +35,7 @@ class CorrEigenEmbedder:
         T, N = past_returns.shape
         min_periods = max(2, int(T * self.min_periods_ratio))
         try:
-            Sigma = cov_from_returns(past_returns, ddof=self.ddof, min_periods=min_periods)
+            Sigma = cov_from_returns(past_returns, ddof=self.ddof, min_frac=0.8)
             C = corr_from_cov(Sigma, eps=self.eps)
             if np.isnan(C).any():
                 complete_mask = ~np.isnan(past_returns).all(axis=0)
