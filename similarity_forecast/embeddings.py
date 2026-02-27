@@ -260,6 +260,28 @@ class PCAWindowEmbedder:
             past = R[anchor - L : anchor]
             yield anchor, past
 
+    def _impute_window(self, X: np.ndarray) -> np.ndarray:
+        """
+        Window-local imputation (no lookahead):
+        - fill NaNs in each column with that column's mean within the window
+        - if a column is all-NaN in the window, fill with 0
+        - also replace +/-inf with 0
+        """
+        X = np.asarray(X, dtype=float)
+        X = np.where(np.isfinite(X), X, np.nan)
+
+        col_mean = np.nanmean(X, axis=0)          # (N,)
+        col_mean = np.where(np.isfinite(col_mean), col_mean, 0.0)
+
+        # fill NaNs
+        inds = np.where(np.isnan(X))
+        if inds[0].size > 0:
+            X[inds] = col_mean[inds[1]]
+
+        # ensure finite
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        return X
+
     def fit(self, returns_df: pd.DataFrame) -> "PCAWindowEmbedder":
         R = returns_df.to_numpy(dtype=float)  # [T,N]
         self.L_, self.N_ = self.lookback, R.shape[1]
@@ -270,20 +292,10 @@ class PCAWindowEmbedder:
 
         for anchor, past in self._build_past_windows_only(R):
             total += 1
-            if self.validate_window_fn is not None:
-                ok = self.validate_window_fn(
-                    past,
-                    max_na_pct=self.max_window_na_pct,
-                    min_stocks_pct=self.min_stocks_with_data_pct,
-                )
-                if not ok:
-                    skipped += 1
-                    if self.verbose_skip:
-                        print(f"[PCA fit] Skipping window at t={anchor}: insufficient data quality")
-                    continue
-
+            # For PCA fit: DO NOT skip; impute instead.
+            past = self._impute_window(past)
             past = self._prep_window(past)
-            X_list.append(past.reshape(-1))  # flatten L*N
+            X_list.append(past.reshape(-1))
 
         if not X_list:
             raise ValueError("PCAWindowEmbedder.fit: no valid windows to fit PCA on.")
@@ -311,7 +323,8 @@ class PCAWindowEmbedder:
         if self.L_ is not None and (L != self.L_ or N != self.N_):
             raise ValueError(f"PCAWindowEmbedder.embed: expected ({self.L_},{self.N_}), got ({L},{N})")
 
-        Xw = self._prep_window(past)
+        Xw = self._impute_window(past)
+        Xw = self._prep_window(Xw)
 
         # (1) global PCA coords on flattened window
         x_flat = Xw.reshape(1, -1)

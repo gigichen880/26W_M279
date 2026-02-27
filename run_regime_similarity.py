@@ -2,7 +2,7 @@
 import pandas as pd
 
 from similarity_forecast.data_validation import print_data_quality_report
-from similarity_forecast.embeddings import CorrEigenEmbedder
+from similarity_forecast.embeddings import CorrEigenEmbedder, PCAEmbedder
 from similarity_forecast.target_objects import CovarianceTarget
 from similarity_forecast.core import LogEuclideanSPDMean
 from similarity_forecast.regimes import RegimeModel
@@ -22,7 +22,7 @@ if FILTER_HIGH_NA_STOCKS:
     print(f"\nFiltering to {len(good_stocks)} stocks with <30% NAs (from {len(returns_df.columns)})")
     returns_df = returns_df[good_stocks]
 
-embedder = CorrEigenEmbedder(k=32)
+# embedder = CorrEigenEmbedder(k=32)
 target = CovarianceTarget(ddof=1)
 aggregator = LogEuclideanSPDMean(eps_spd=1e-8)
 

@@ -11,9 +11,9 @@ from similarity_forecast.backtests import (
     realized_portfolio_variance,
 )
 
-from similarity_forecast.embeddings import CorrEigenEmbedder
+from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder
 from similarity_forecast.target_objects import CovarianceTarget
-from similarity_forecast.core import LogEuclideanSPDMean
+from similarity_forecast.core import LogEuclideanSPDMean, validate_window, project_to_spd
 from similarity_forecast.regimes import RegimeModel
 from similarity_forecast.pipeline import RegimeAwareSimilarityForecaster
 from similarity_forecast.regime_weighting import RegimeAwareWeights
@@ -23,12 +23,20 @@ def build_model(
     lookback: int = 60,
     horizon: int = 20,
     n_regimes: int = 4,
-    tau: float = 1.0,
+    tau: float = 20.0,
     k_eigs: int = 32,
     ddof: int = 1,
     random_state: int = 0,
 ) -> RegimeAwareSimilarityForecaster:
-    embedder = CorrEigenEmbedder(k=k_eigs)
+    # embedder = CorrEigenEmbedder(k=k_eigs)
+    embedder = PCAWindowEmbedder(
+        lookback=lookback,
+        k=5,
+        validate_window_fn=validate_window,  # reuse yours
+        max_window_na_pct=0.0,
+        min_stocks_with_data_pct=1.0,
+        verbose_skip=False,
+    )
     target = CovarianceTarget(ddof=ddof)
     aggregator = LogEuclideanSPDMean(eps_spd=1e-8)
     regime_model = RegimeModel(n_regimes=n_regimes, random_state=random_state)
@@ -175,6 +183,7 @@ def run_backtest(
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} prediction failed: {e}")
             continue
         Sigma_hat = np.asarray(Sigma_hat, dtype=float)
+        Sigma_hat = project_to_spd(Sigma_hat, eps=1e-8)
 
         # --- True Σtrue from realized future window ---
         fut = R[raw_anchor + 1 : raw_anchor + horizon + 1, :]  # (H, N)
@@ -185,6 +194,7 @@ def run_backtest(
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} true target failed: {e}")
             continue
         Sigma_true = np.asarray(Sigma_true, dtype=float)
+        Sigma_true = project_to_spd(Sigma_true, eps=1e-8)
 
         # --- Metrics ---
         fro = frobenius_error(Sigma_hat, Sigma_true)
@@ -226,8 +236,8 @@ if __name__ == "__main__":
         returns_df=returns_df,
         lookback=60,
         horizon=20,
-        start_date="2010-01-01",   # e.g. "2010-01-01"
-        end_date="2012-12-31",     # e.g. "2019-12-31"
+        start_date="2018-01-01",
+        end_date="2020-12-31", 
         k_neighbors=50,
         refit_every=20,
         long_only=False,
