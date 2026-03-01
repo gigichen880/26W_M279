@@ -20,6 +20,55 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+def _metric_cols(df: pd.DataFrame, metric: str) -> dict:
+    """
+    Return available columns for a given metric across methods.
+    Expected naming: model_{metric}, pers_{metric}, roll_{metric}, shrink_{metric}.
+    """
+    out = {}
+    for m in ["model", "pers", "roll", "shrink"]:
+        c = f"{m}_{metric}"
+        if c in df.columns:
+            out[m] = c
+    return out
+
+
+def _is_higher_better(metric: str) -> bool:
+    # Only corr_spearman is higher-is-better in your current suite.
+    return metric == "corr_spearman"
+
+
+def _skill_series(model: pd.Series, base: pd.Series, metric: str) -> pd.Series:
+    """
+    Skill per date:
+      - losses: ratio model/base (good < 1)
+      - corr_spearman: diff model-base (good > 0)
+    """
+    model = model.astype(float).replace([np.inf, -np.inf], np.nan)
+    base = base.astype(float).replace([np.inf, -np.inf], np.nan)
+
+    if _is_higher_better(metric):
+        return model - base
+    else:
+        return model / np.maximum(base, 1e-12)
+
+
+def _win_series(model: pd.Series, base: pd.Series, metric: str) -> pd.Series:
+    """
+    Win indicator per date:
+      - losses: 1(model < base)
+      - corr_spearman: 1(model > base)
+    """
+    model = model.astype(float).replace([np.inf, -np.inf], np.nan)
+    base = base.astype(float).replace([np.inf, -np.inf], np.nan)
+    ok = model.notna() & base.notna()
+
+    win = pd.Series(np.nan, index=model.index)
+    if _is_higher_better(metric):
+        win.loc[ok] = (model.loc[ok] > base.loc[ok]).astype(float)
+    else:
+        win.loc[ok] = (model.loc[ok] < base.loc[ok]).astype(float)
+    return win
 
 def _read_results(csv_path: str) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
@@ -191,10 +240,6 @@ def plot_worst_dates(df: pd.DataFrame, outdir: str, metric: str, topk: int = 10)
     plt.grid(True, axis="y", alpha=0.3)
     _savefig(os.path.join(outdir, f"worst_{topk}_{metric}.png"))
 
-
-# ----------------------------
-# NEW: Portfolio calibration plots
-# ----------------------------
 def plot_portfolio_calibration(df: pd.DataFrame, outdir: str) -> None:
     if "pred_var" not in df.columns or "real_var" not in df.columns:
         return
@@ -256,6 +301,171 @@ def plot_portfolio_diagnostics(df: pd.DataFrame, outdir: str) -> None:
         ax.grid(True, alpha=0.3)
     _savefig(os.path.join(outdir, "portfolio_diagnostics_timeseries.png"))
 
+def plot_method_overlays(df: pd.DataFrame, outdir: str) -> None:
+    """
+    For each metric, overlay model/pers/roll/shrink over time.
+    Produces a single multi-panel figure.
+    """
+    metrics = [
+        ("fro", "Frobenius error"),
+        ("kl", "KL divergence"),
+        ("nll", "Gaussian NLL"),
+        ("logeuc", "Log-Euclidean distance"),
+        ("corr_spearman", "Corr Spearman"),
+        ("corr_offdiag_fro", "Corr offdiag Fro"),
+        ("port_mse_logvar", "Multi-port MSE log(var)"),
+        ("turnover_l1", "Turnover L1"),
+    ]
+
+    # only keep metrics that have model_ columns
+    metrics = [(m, t) for (m, t) in metrics if f"model_{m}" in df.columns]
+    if not metrics:
+        print("[warn] No model_* columns found for method overlays.")
+        return
+
+    n = len(metrics)
+    fig = plt.figure(figsize=(12, 2.4 * n))
+
+    for i, (metric, title) in enumerate(metrics, start=1):
+        ax = fig.add_subplot(n, 1, i)
+
+        cols = _metric_cols(df, metric)
+        for m, c in cols.items():
+            s = df[c].astype(float).replace([np.inf, -np.inf], np.nan)
+            ax.plot(s.index, s.values, label=m, alpha=0.9 if m == "model" else 0.6)
+
+        ax.set_title(f"{title}: model vs baselines")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", ncol=4)
+
+        # log-scale for heavy-tailed positive losses
+        if metric in {"kl", "nll", "logeuc", "corr_offdiag_fro", "port_mse_logvar"}:
+            # check positivity across all plotted series
+            all_vals = []
+            for c in cols.values():
+                vv = df[c].astype(float).replace([np.inf, -np.inf], np.nan).values
+                all_vals.append(vv)
+            all_vals = np.concatenate([v for v in all_vals if v.size > 0])
+            if all_vals.size > 0 and np.nanmin(all_vals) > 0:
+                ax.set_yscale("log")
+
+    _savefig(os.path.join(outdir, "method_overlays.png"))
+
+def plot_skill_timeseries(df: pd.DataFrame, outdir: str) -> None:
+    """
+    Plot per-date skill of model vs each baseline for several metrics.
+    Loss metrics: ratio model/base (<1 good)
+    corr_spearman: diff model-base (>0 good)
+    """
+    metrics = ["fro", "kl", "nll", "logeuc", "corr_spearman", "corr_offdiag_fro", "port_mse_logvar"]
+    metrics = [m for m in metrics if f"model_{m}" in df.columns]
+    if not metrics:
+        return
+
+    fig = plt.figure(figsize=(12, 2.4 * len(metrics)))
+    for i, metric in enumerate(metrics, start=1):
+        ax = fig.add_subplot(len(metrics), 1, i)
+
+        cols = _metric_cols(df, metric)
+        if "model" not in cols:
+            continue
+
+        model_s = df[cols["model"]]
+        for b in ["pers", "roll", "shrink"]:
+            if b not in cols:
+                continue
+            skill = _skill_series(model_s, df[cols[b]], metric)
+            ax.plot(skill.index, skill.values, label=f"vs {b}", alpha=0.85)
+
+        # reference line
+        if _is_higher_better(metric):
+            ax.axhline(0.0, linestyle="--", alpha=0.7)
+            ax.set_title(f"Skill (diff): model - baseline for {metric}")
+        else:
+            ax.axhline(1.0, linestyle="--", alpha=0.7)
+            ax.set_title(f"Skill (ratio): model / baseline for {metric}  (<1 better)")
+
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", ncol=3)
+
+        # for ratio metrics, log scale can help if all positive
+        if not _is_higher_better(metric):
+            vals = ax.lines[0].get_ydata()
+            if np.size(vals) and np.nanmin(vals) > 0:
+                ax.set_yscale("log")
+
+    _savefig(os.path.join(outdir, "skill_timeseries.png"))
+
+def plot_rolling_winrates(df: pd.DataFrame, outdir: str, window: int = 63) -> None:
+    """
+    Rolling win-rate of model vs baselines.
+    Win definition:
+      - losses: model < baseline
+      - corr_spearman: model > baseline
+    """
+    metrics = ["fro", "kl", "nll", "logeuc", "corr_spearman", "port_mse_logvar"]
+    metrics = [m for m in metrics if f"model_{m}" in df.columns]
+    if not metrics:
+        return
+
+    fig = plt.figure(figsize=(12, 2.4 * len(metrics)))
+    for i, metric in enumerate(metrics, start=1):
+        ax = fig.add_subplot(len(metrics), 1, i)
+
+        cols = _metric_cols(df, metric)
+        if "model" not in cols:
+            continue
+
+        model_s = df[cols["model"]]
+        for b in ["pers", "roll", "shrink"]:
+            if b not in cols:
+                continue
+            win = _win_series(model_s, df[cols[b]], metric)
+            wr = win.rolling(window, min_periods=max(10, window // 3)).mean()
+            ax.plot(wr.index, wr.values, label=f"vs {b}")
+
+        ax.axhline(0.5, linestyle="--", alpha=0.7)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_title(f"{window}d rolling win-rate for {metric} (model vs baseline)")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", ncol=3)
+
+    _savefig(os.path.join(outdir, f"rolling_winrate_{window}d.png"))
+
+def plot_skill_distributions(df: pd.DataFrame, outdir: str) -> None:
+    metrics = ["fro", "kl", "nll", "logeuc", "corr_spearman", "port_mse_logvar"]
+    metrics = [m for m in metrics if f"model_{m}" in df.columns]
+    if not metrics:
+        return
+
+    fig = plt.figure(figsize=(12, 2.8 * len(metrics)))
+    for i, metric in enumerate(metrics, start=1):
+        ax = fig.add_subplot(len(metrics), 1, i)
+
+        cols = _metric_cols(df, metric)
+        if "model" not in cols:
+            continue
+        model_s = df[cols["model"]]
+
+        for b in ["pers", "roll", "shrink"]:
+            if b not in cols:
+                continue
+            skill = _skill_series(model_s, df[cols[b]], metric).replace([np.inf, -np.inf], np.nan).dropna()
+            if len(skill) < 10:
+                continue
+            ax.hist(skill.values, bins=60, alpha=0.35, label=f"vs {b}")
+
+        if _is_higher_better(metric):
+            ax.axvline(0.0, linestyle="--", alpha=0.7)
+            ax.set_title(f"Skill distribution (diff): model - baseline for {metric}  (>0 better)")
+        else:
+            ax.axvline(1.0, linestyle="--", alpha=0.7)
+            ax.set_title(f"Skill distribution (ratio): model / baseline for {metric}  (<1 better)")
+
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", ncol=3)
+
+    _savefig(os.path.join(outdir, "skill_distributions.png"))
 
 def main():
     ap = argparse.ArgumentParser()
@@ -264,6 +474,7 @@ def main():
     ap.add_argument("--start", type=str, default=None)
     ap.add_argument("--end", type=str, default=None)
     ap.add_argument("--roll", type=int, default=21)
+    ap.add_argument("--winroll", type=int, default=63)
     args = ap.parse_args()
 
     df = _read_results(args.csv)
@@ -285,9 +496,14 @@ def main():
     plot_portfolio_calibration(df, args.outdir)
     plot_portfolio_diagnostics(df, args.outdir)
 
-    # Worst-date bar charts for key metrics
-    for m in ["kl", "nll", "logeuc", "corr_offdiag_fro", "port_mse_logvar", "turnover_l1"]:
-        plot_worst_dates(df, args.outdir, metric=m, topk=10)
+    # # Worst-date bar charts for key metrics
+    # for m in ["kl", "nll", "logeuc", "corr_offdiag_fro", "port_mse_logvar", "turnover_l1"]:
+    #     plot_worst_dates(df, args.outdir, metric=m, topk=10)
+
+    plot_method_overlays(df, args.outdir)
+    plot_skill_timeseries(df, args.outdir)
+    plot_rolling_winrates(df, args.outdir, window=args.winroll)
+    plot_skill_distributions(df, args.outdir)
 
     print(f"\nSaved figures to: {args.outdir}")
     print("Key files:")
@@ -300,6 +516,10 @@ def main():
     print("  gmvp_risk_ratio_timeseries.png")
     print("  gmvp_calibration_scatter.png")
     print("  portfolio_diagnostics_timeseries.png")
+    print("  method_overlays.png")
+    print("  skill_timeseries.png")
+    print(f"  rolling_winrate_{args.winroll}d.png")
+    print("  skill_distributions.png")
 
 
 if __name__ == "__main__":

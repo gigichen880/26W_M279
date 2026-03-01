@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, List, Tuple, Dict, Any
-from xml.parsers.expat import model
+from typing import Optional, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -11,9 +10,10 @@ from numpy.typing import NDArray
 
 from .embeddings import WindowEmbedder
 from .target_objects import TargetObject
-from .core import ExactKNN, Weighting, Aggregator, validate_window
+from .core import ExactKNN, Aggregator, validate_window
 from .regimes import RegimeModel
 from .regime_weighting import RegimeAwareWeights
+
 
 
 @dataclass
@@ -68,6 +68,10 @@ class RegimeAwareSimilarityForecaster:
     # for debugging / alignment
     anchor_dates_: Optional[pd.DatetimeIndex] = None
     anchor_rows_: Optional[np.ndarray] = None  # shape [T0], raw row index for each sample
+
+    # hard / soft transition in prediction
+    transition_estimator: str = "hard"  # {"hard","soft"}
+    trans_smooth: float = 1.0           # Laplace smoothing λ
 
     def _build_windows(self, R: NDArray[np.floating]) -> List[Tuple[int, slice, slice]]:
         """
@@ -158,70 +162,138 @@ class RegimeAwareSimilarityForecaster:
         self.PI_ = self.regime_model.predict_pi(self.embeds_)  # [T0, K]
 
         # Stage 3: estimate transition + filter alpha
-        self.A_ = self.regime_model.estimate_transition(self.PI_)
+        self.A_ = self.regime_model.estimate_transition(
+            self.PI_,
+            mode=self.transition_estimator,
+            trans_smooth=self.trans_smooth,
+        )
         self.ALPHA_ = self.regime_model.filter_alpha(self.PI_, A=self.A_)
 
         return self
-
-    def _kappa_from_dist(self, dist: NDArray[np.floating]) -> NDArray[np.floating]:
-        """
-        Stage 4 kernel: kappa_i = exp(-||z0-zi|| / tau)
-        (note: your previous RBFWeighting used exp(-d^2/tau); this uses exp(-d/tau) per spec)
-        """
-        tau = max(self.tau, self.eps)
-        kappa = np.exp(-dist / tau)
-        return kappa.astype(float)
     
-    # def predict_at_raw_anchor(
-    #     self,
-    #     past: np.ndarray,            # (L, N)
-    #     raw_anchor: int,             # <-- ADD THIS
-    #     k_neighbors: int = 50,
-    # ) -> np.ndarray:
-    #     self._check_fitted()
-    #     assert self.embeds_ is not None and self.targets_ is not None and self.knn_ is not None
-    #     assert self.PI_ is not None and self.ALPHA_ is not None and self.A_ is not None
-    #     assert self.anchor_rows_ is not None
+    def _normalize_prob(self, v: NDArray[np.floating]) -> NDArray[np.floating]:
+        s = float(np.sum(v))
+        if (not np.isfinite(s)) or s <= self.eps:
+            # deterministic fallback: uniform
+            out = np.ones_like(v, dtype=float)
+            out /= max(out.size, 1)
+            return out
+        return (v / s).astype(float)
 
-    #     # Stage 1: embed current window
-    #     e0 = self.embedder.embed(past).astype(float)  # (D,)
+    def _filter_update(
+        self,
+        alpha_prev: NDArray[np.floating],
+        A: NDArray[np.floating],
+        pi_t: NDArray[np.floating],
+    ) -> NDArray[np.floating]:
+        """
+        One-step Bayesian filtering update:
+            prior = alpha_prev @ A
+            alpha_t ∝ prior ⊙ pi_t
+        """
+        prior = alpha_prev @ A
+        post = prior * pi_t
+        return self._normalize_prob(post)
 
-    #     # Stage 2: pi0 for current point (safe: uses trained GMM)
-    #     pi0 = self.regime_model.predict_pi(e0[None, :])[0]  # (K,)
+    def _latest_alpha_before_raw_anchor(self, raw_anchor: int) -> Optional[NDArray[np.floating]]:
+        """
+        Return the most recent filtered ALPHA_ available strictly before raw_anchor
+        in the raw timeline, using anchor_rows_ alignment.
+        """
+        assert self.anchor_rows_ is not None and self.ALPHA_ is not None
+        eligible = np.where(self.anchor_rows_ <= (raw_anchor - 1))[0]
+        if eligible.size == 0:
+            return None
+        j = int(eligible[-1])
+        return self.ALPHA_[j]
 
-    #     # Stage 3: for *raw* anchor, safest is alpha = pi0 (no misaligned transition jump)
-    #     alpha = pi0
+    # ----------------------------
+    # kernel
+    # ----------------------------
+    def _kappa_from_dist(self, dist: NDArray[np.floating]) -> NDArray[np.floating]:
+        tau = max(self.tau, self.eps)
+        return np.exp(-dist / tau).astype(float)
 
-    #     # Stage 4: retrieve neighbors from library (overshoot then filter)
-    #     k = min(k_neighbors, self.embeds_.shape[0])
-    #     k_search = min(max(5 * k, k), self.embeds_.shape[0])
-    #     idx_all, dist_all = self.knn_.query(e=e0, k=k_search, exclude_index=None)
+    # ----------------------------
+    # prediction (Stages 1–5)
+    # ----------------------------
+    def predict_at_raw_anchor(
+        self,
+        past: NDArray[np.floating],     # (L, N)
+        raw_anchor: int,
+        k_neighbors: int = 50,
+        use_filter: bool = True,
+        alpha_fallback: str = "pi",     # {"pi","uniform"}
+    ) -> NDArray[np.floating]:
+        """
+        Stage 1: embed current window -> e0
+        Stage 2: regime membership from GMM -> pi0
+        Stage 3: alpha choice:
+            - if use_filter: alpha := filter_update(alpha_prev, A_, pi0)
+            - else:         alpha := pi0
 
-    #     # CRITICAL: only use neighbors whose labels are observable at time raw_anchor
-    #     # neighbor anchor a must satisfy a + H <= raw_anchor  <=>  a <= raw_anchor - H
-    #     H = self.horizon
-    #     is_label_available = self.anchor_rows_[idx_all] <= (raw_anchor - H)
-    #     idx = idx_all[is_label_available]
-    #     dist = dist_all[is_label_available]
+        NOTE:
+        - hard vs soft is controlled ONLY by self.transition_estimator during fit()
+            when estimating A_. Prediction-time filtering always uses stored A_.
+        """
+        self._check_fitted()
+        assert self.embeds_ is not None and self.targets_ is not None and self.knn_ is not None
+        assert self.PI_ is not None and self.ALPHA_ is not None and self.A_ is not None
+        assert self.anchor_rows_ is not None
 
-    #     if idx.size == 0:
-    #         raise ValueError("No label-available neighbors (try smaller horizon or larger train history).")
-    #     if idx.size > k:
-    #         idx = idx[:k]
-    #         dist = dist[:k]
+        if alpha_fallback not in {"pi", "uniform"}:
+            raise ValueError(f"alpha_fallback must be one of {{'pi','uniform'}}, got {alpha_fallback!r}")
 
-    #     # Stage 4 kernel
-    #     kappa = self._kappa_from_dist(dist)
-    #     kappa = kappa / max(kappa.sum(), model.eps)
+        # ---- Stage 1: embed ----
+        e0 = self.embedder.embed(past).astype(float)  # (D,)
 
-    #     # Stage 5 regime-aware neighbor weights
-    #     PI_nbr = self.PI_[idx]  # (M, K)
-    #     W = RegimeAwareWeights(eps=self.eps).compute(kappa=kappa, PI_neighbors=PI_nbr)  # (K, M)
+        # ---- Stage 2: pi0 ----
+        pi0 = self.regime_model.predict_pi(e0[None, :])[0].astype(float)  # (K,)
+        pi0 = self._normalize_prob(pi0)
 
-    #     yk_list = []
-    #     for kk in range(W.shape[0]):
-    #         yk_list.append(self.aggregator.aggregate(self.targets_[idx], W[kk]))
-    #     YK = np.stack(yk_list, axis=0)
+        # ---- Stage 3: alpha ----
+        if not use_filter:
+            alpha = pi0
+        else:
+            alpha_prev = self._latest_alpha_before_raw_anchor(raw_anchor)
+            if alpha_prev is None:
+                alpha = pi0 if alpha_fallback == "pi" else (np.ones_like(pi0) / max(pi0.size, 1))
+            else:
+                alpha_prev = self._normalize_prob(alpha_prev.astype(float))
+                alpha = self._filter_update(alpha_prev=alpha_prev, A=self.A_, pi_t=pi0)
 
-    #     yhat = np.tensordot(alpha, YK, axes=(0, 0))
-    #     return self.target_object.postprocess(yhat)
+                if not np.all(np.isfinite(alpha)) or float(np.sum(alpha)) <= self.eps:
+                    alpha = pi0 if alpha_fallback == "pi" else (np.ones_like(pi0) / max(pi0.size, 1))
+
+        # ---- Stage 4: retrieve neighbors (overshoot then filter) ----
+        k = min(k_neighbors, self.embeds_.shape[0])
+        k_search = min(max(5 * k, k), self.embeds_.shape[0])
+
+        idx_all, dist_all = self.knn_.query(e=e0, k=k_search, exclude_index=None)
+
+        # label-availability: neighbor anchor a must satisfy a <= raw_anchor - H
+        H = self.horizon
+        is_label_available = self.anchor_rows_[idx_all] <= (raw_anchor - H)
+        idx = idx_all[is_label_available]
+        dist = dist_all[is_label_available]
+
+        if idx.size == 0:
+            raise ValueError("No label-available neighbors (try smaller horizon or larger train history).")
+        if idx.size > k:
+            idx = idx[:k]
+            dist = dist[:k]
+
+        kappa = self._kappa_from_dist(dist)
+        kappa = kappa / max(float(kappa.sum()), self.eps)
+
+        # ---- Stage 5: regime-aware neighbor weights ----
+        PI_nbr = self.PI_[idx]  # (M, K)
+        W = RegimeAwareWeights(eps=self.eps).compute(kappa=kappa, PI_neighbors=PI_nbr)  # (K, M)
+
+        yk_list = []
+        for kk in range(W.shape[0]):
+            yk_list.append(self.aggregator.aggregate(self.targets_[idx], W[kk]))
+        YK = np.stack(yk_list, axis=0)  # (K, ...)
+
+        yhat = np.tensordot(alpha, YK, axes=(0, 0))
+        return self.target_object.postprocess(yhat)

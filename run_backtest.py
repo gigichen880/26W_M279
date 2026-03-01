@@ -1,3 +1,4 @@
+# run_backtest.py
 from __future__ import annotations
 
 from datetime import date
@@ -59,6 +60,8 @@ def build_model(
     k_eigs: int = 32,
     ddof: int = 1,
     random_state: int = 0,
+    transition_estimator: str = "hard",
+    trans_smooth: float = 1.0,
 ) -> RegimeAwareSimilarityForecaster:
     # embedder = CorrEigenEmbedder(k=k_eigs)
     embedder = PCAWindowEmbedder(
@@ -80,62 +83,9 @@ def build_model(
         horizon=horizon,
         regime_model=regime_model,
         tau=tau,
+        transition_estimator=transition_estimator, 
+        trans_smooth=trans_smooth,           
     )
-
-
-def predict_at_raw_anchor(
-    model: RegimeAwareSimilarityForecaster,
-    past: np.ndarray,            # (L, N)
-    raw_anchor: int,             # <-- ADD THIS
-    k_neighbors: int = 50,
-) -> np.ndarray:
-    model._check_fitted()
-    assert model.embeds_ is not None and model.targets_ is not None and model.knn_ is not None
-    assert model.PI_ is not None and model.ALPHA_ is not None and model.A_ is not None
-    assert model.anchor_rows_ is not None
-
-    # Stage 1: embed current window
-    e0 = model.embedder.embed(past).astype(float)  # (D,)
-
-    # Stage 2: pi0 for current point (safe: uses trained GMM)
-    pi0 = model.regime_model.predict_pi(e0[None, :])[0]  # (K,)
-
-    # Stage 3: for *raw* anchor, safest is alpha = pi0 (no misaligned transition jump)
-    alpha = pi0
-
-    # Stage 4: retrieve neighbors from library (overshoot then filter)
-    k = min(k_neighbors, model.embeds_.shape[0])
-    k_search = min(max(5 * k, k), model.embeds_.shape[0])
-    idx_all, dist_all = model.knn_.query(e=e0, k=k_search, exclude_index=None)
-
-    # CRITICAL: only use neighbors whose labels are observable at time raw_anchor
-    # neighbor anchor a must satisfy a + H <= raw_anchor  <=>  a <= raw_anchor - H
-    H = model.horizon
-    is_label_available = model.anchor_rows_[idx_all] <= (raw_anchor - H)
-    idx = idx_all[is_label_available]
-    dist = dist_all[is_label_available]
-
-    if idx.size == 0:
-        raise ValueError("No label-available neighbors (try smaller horizon or larger train history).")
-    if idx.size > k:
-        idx = idx[:k]
-        dist = dist[:k]
-
-    # Stage 4 kernel
-    kappa = model._kappa_from_dist(dist)
-    kappa = kappa / max(kappa.sum(), model.eps)
-
-    # Stage 5 regime-aware neighbor weights
-    PI_nbr = model.PI_[idx]  # (M, K)
-    W = RegimeAwareWeights(eps=model.eps).compute(kappa=kappa, PI_neighbors=PI_nbr)  # (K, M)
-
-    yk_list = []
-    for kk in range(W.shape[0]):
-        yk_list.append(model.aggregator.aggregate(model.targets_[idx], W[kk]))
-    YK = np.stack(yk_list, axis=0)
-
-    yhat = np.tensordot(alpha, YK, axes=(0, 0))
-    return model.target_object.postprocess(yhat)
 
 def run_backtest(
     returns_df: pd.DataFrame,
@@ -180,7 +130,12 @@ def run_backtest(
     for raw_anchor in range(raw_anchor_start, raw_anchor_end + 1):
         if (model is None) or (last_refit_raw_anchor is None) or (raw_anchor - last_refit_raw_anchor >= refit_every):
             train_df = df.iloc[: raw_anchor + 1]
-            model = build_model(lookback=lookback, horizon=horizon)
+            model = build_model(
+                lookback=lookback,
+                horizon=horizon,
+                transition_estimator="soft",  # or "hard"
+                trans_smooth=1.0,
+            )
 
             if verbose:
                 print(f"[refit] raw_anchor={raw_anchor} date={dates[raw_anchor].date()} train_T={len(train_df)}")
@@ -204,7 +159,12 @@ def run_backtest(
         past = R[raw_anchor - lookback + 1 : raw_anchor + 1, :]  # (L, N)
 
         try:
-            Sigma_hat = predict_at_raw_anchor(model, past=past, raw_anchor=raw_anchor, k_neighbors=k_neighbors)
+            Sigma_hat = model.predict_at_raw_anchor(
+                past=past,
+                raw_anchor=raw_anchor,
+                k_neighbors=k_neighbors,
+                use_filter=True,
+            )
         except Exception as e:
             if verbose:
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} prediction failed: {e}")
@@ -265,54 +225,104 @@ def run_backtest(
     out = pd.DataFrame(rows).set_index("date").sort_index()
     return out
 
-def summarize_comparison(results: pd.DataFrame):
+
+def summarize_comparison(results: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extended comparison:
+      - Mean metric per method
+      - Skill vs each baseline
+      - Win-rate vs each baseline
+      - Skill vs best baseline
+      - Win-rate vs best baseline
+    """
+
     compare_keys = [
         "fro", "kl", "nll", "stein", "logeuc",
         "corr_offdiag_fro", "corr_spearman",
-        "port_mse_logvar"
+        "eig_log_mse", "cond_ratio",
+        "port_mse_var", "port_mse_logvar", "port_mae_logvar",
     ]
 
+    baselines = ["pers", "roll", "shrink"]
     rows = []
 
     for key in compare_keys:
         m_col = f"model_{key}"
-        p_col = f"pers_{key}"
-        r_col = f"roll_{key}"
-        s_col = f"shrink_{key}"
-
         if m_col not in results.columns:
             continue
 
         row = {"metric": key}
 
-        for label, col in [
-            ("model", m_col),
-            ("pers", p_col),
-            ("roll", r_col),
-            ("shrink", s_col),
-        ]:
-            if col in results.columns:
-                row[label] = float(results[col].mean())
-            else:
-                row[label] = np.nan
+        # ---- Means ----
+        for label in ["model"] + baselines:
+            col = f"{label}_{key}"
+            row[label] = float(results[col].mean()) if col in results.columns else np.nan
 
-        # Skill (ratio for losses, diff for correlation)
-        if key == "corr_spearman":
-            row["skill_vs_pers"] = row["model"] - row["pers"]
-            row["win_rate_vs_pers"] = float(
-                (results[m_col] > results[p_col]).mean()
-            )
+        # ---- Skill + Win-rate vs each baseline ----
+        for b in baselines:
+            b_col = f"{b}_{key}"
+            if b_col not in results.columns:
+                row[f"skill_vs_{b}"] = np.nan
+                row[f"win_rate_vs_{b}"] = np.nan
+                continue
+
+            m = results[m_col].to_numpy(dtype=float)
+            bb = results[b_col].to_numpy(dtype=float)
+
+            valid = np.isfinite(m) & np.isfinite(bb)
+            if not np.any(valid):
+                row[f"skill_vs_{b}"] = np.nan
+                row[f"win_rate_vs_{b}"] = np.nan
+                continue
+
+            m = m[valid]
+            bb = bb[valid]
+
+            if key == "corr_spearman":
+                diff = m - bb
+                row[f"skill_vs_{b}"] = float(np.mean(diff))
+                row[f"win_rate_vs_{b}"] = float(np.mean(diff > 0))
+            else:
+                ratio = m / np.maximum(bb, 1e-12)
+                row[f"skill_vs_{b}"] = float(np.mean(ratio))
+                row[f"win_rate_vs_{b}"] = float(np.mean(m < bb))
+
+        # ---- vs BEST baseline per date ----
+        b_cols = [f"{b}_{key}" for b in baselines if f"{b}_{key}" in results.columns]
+
+        if len(b_cols) >= 2:
+            m = results[m_col].to_numpy(dtype=float)
+            B = results[b_cols].to_numpy(dtype=float)
+
+            valid = np.isfinite(m) & np.isfinite(B).all(axis=1)
+            if np.any(valid):
+                m = m[valid]
+                B = B[valid]
+
+                if key == "corr_spearman":
+                    best = np.max(B, axis=1)
+                    diff = m - best
+                    row["skill_vs_best"] = float(np.mean(diff))
+                    row["win_rate_vs_best"] = float(np.mean(diff > 0))
+                else:
+                    best = np.min(B, axis=1)
+                    ratio = m / np.maximum(best, 1e-12)
+                    row["skill_vs_best"] = float(np.mean(ratio))
+                    row["win_rate_vs_best"] = float(np.mean(m < best))
+            else:
+                row["skill_vs_best"] = np.nan
+                row["win_rate_vs_best"] = np.nan
         else:
-            row["skill_vs_pers"] = row["model"] / row["pers"]
-            row["win_rate_vs_pers"] = float(
-                (results[m_col] < results[p_col]).mean()
-            )
+            row["skill_vs_best"] = np.nan
+            row["win_rate_vs_best"] = np.nan
 
         rows.append(row)
 
     return pd.DataFrame(rows)
 
 def main():
+    os.makedirs("results", exist_ok=True)
+
     returns_df = clean_returns_matrix_at_load(
         parquet_path="data/processed/returns_universe_100.parquet",
         policy="drop_date",          # safest first pass
@@ -328,7 +338,7 @@ def main():
         lookback=40,
         horizon=30,
         start_date="2015-01-01",
-        end_date="2020-5-31",
+        end_date="2018-5-31",
         k_neighbors=10,
         refit_every=5,
         long_only=False,
@@ -336,7 +346,7 @@ def main():
     )
 
     # ----------------------------
-    # Summaries
+    # Headline metrics summary
     # ----------------------------
     BASE = [
         "fro", "kl", "nll", "stein", "logeuc",
@@ -346,70 +356,137 @@ def main():
         "port_mse_var", "port_mse_logvar", "port_mae_logvar",
         "w_hhi", "w_max_abs", "w_l1",
     ]
-
     METHODS = ["model", "pers", "roll", "shrink"]
 
     headline_cols = []
     for m in METHODS:
         headline_cols += [f"{m}_{k}" for k in BASE]
-
-    # keep only existing
     headline_cols = [c for c in headline_cols if c in results.columns]
 
     print("\n===== SUMMARY (headline metrics) =====")
-    print(results[headline_cols].describe())
+    desc = results[headline_cols].describe()
+    print(desc)
 
-    # # Optional: quick “worst offenders” to debug outliers
-    # for key in ["kl", "nll", "logeuc", "corr_offdiag_fro", "port_mse_logvar", "turnover_l1"]:
-    #     if key in results.columns:
-    #         print(f"\n===== WORST 5 by {key} =====")
-    #         print(results[[key]].sort_values(key, ascending=False).head(5))
+    # save describe() to CSV (flatten index)
+    desc_out = desc.copy()
+    desc_out.insert(0, "stat", desc_out.index)
+    desc_out.reset_index(drop=True, inplace=True)
+    desc_out.to_csv("results/regime_similarity_headline_describe.csv", index=False)
 
     # ----------------------------
-    # Portfolio calibration summary (GMVP)
+    # Portfolio calibration (GMVP) summary
     # ----------------------------
-    if "pred_var" in results.columns and "real_var" in results.columns:
-        tmp = results[["pred_var", "real_var"]].replace([np.inf, -np.inf], np.nan).dropna()
+    calib_row = {}
+    pred_col = "model_pred_var" if "model_pred_var" in results.columns else "pred_var"
+    real_col = "model_real_var" if "model_real_var" in results.columns else "real_var"
+
+    if pred_col in results.columns and real_col in results.columns:
+        tmp = results[[pred_col, real_col]].replace([np.inf, -np.inf], np.nan).dropna()
         if len(tmp) > 5:
-            ratio = tmp["real_var"] / np.maximum(tmp["pred_var"], 1e-12)
+            ratio = tmp[real_col] / np.maximum(tmp[pred_col], 1e-12)
+            calib_row = {
+                "section": "gmvp_calibration",
+                "n": int(len(tmp)),
+                "real_over_pred_mean": float(ratio.mean()),
+                "real_over_pred_median": float(ratio.median()),
+                "real_over_pred_p90": float(ratio.quantile(0.90)),
+                "real_over_pred_p99": float(ratio.quantile(0.99)),
+                "corr_pred_real": float(tmp[pred_col].corr(tmp[real_col])),
+            }
+
             print("\n===== PORTFOLIO (GMVP) CALIBRATION =====")
-            print("n =", len(tmp))
-            print("real/pred ratio: mean =", float(ratio.mean()),
-                  "median =", float(ratio.median()),
-                  "p90 =", float(ratio.quantile(0.90)),
-                  "p99 =", float(ratio.quantile(0.99)))
-            print("corr(pred_var, real_var) =", float(tmp["pred_var"].corr(tmp["real_var"])))
+            for k, v in calib_row.items():
+                if k != "section":
+                    print(k, "=", v)
 
     # ----------------------------
-    # Multi-portfolio risk errors summary
+    # Multi-portfolio + stability summaries (describe)
     # ----------------------------
-    multi_cols = [c for c in ["port_mse_var", "port_mse_logvar", "port_mae_logvar"] if c in results.columns]
+    multi_cols = [c for c in ["model_port_mse_var", "model_port_mse_logvar", "model_port_mae_logvar",
+                             "port_mse_var", "port_mse_logvar", "port_mae_logvar"] if c in results.columns]
+    stab_cols = [c for c in ["turnover_l1", "model_turnover_l1", "model_w_hhi", "model_w_max_abs", "model_w_l1",
+                            "w_hhi", "w_max_abs", "w_l1"] if c in results.columns]
+
     if multi_cols:
         print("\n===== PORTFOLIO (MULTI) RISK ERRORS =====")
-        print(results[multi_cols].describe())
+        multi_desc = results[multi_cols].describe()
+        print(multi_desc)
+        multi_out = multi_desc.copy()
+        multi_out.insert(0, "stat", multi_out.index)
+        multi_out.reset_index(drop=True, inplace=True)
+        multi_out.to_csv("results/regime_similarity_multi_portfolio_describe.csv", index=False)
 
-    # ----------------------------
-    # Portfolio stability summary
-    # ----------------------------
-    stab_cols = [c for c in ["turnover_l1", "w_hhi", "w_max_abs", "w_l1"] if c in results.columns]
     if stab_cols:
         print("\n===== PORTFOLIO STABILITY =====")
-        print(results[stab_cols].describe())
+        stab_desc = results[stab_cols].describe()
+        print(stab_desc)
+        stab_out = stab_desc.copy()
+        stab_out.insert(0, "stat", stab_out.index)
+        stab_out.reset_index(drop=True, inplace=True)
+        stab_out.to_csv("results/regime_similarity_stability_describe.csv", index=False)
 
-    print("\n===== METHOD COMPARISON =====")
+    # ----------------------------
+    # Extended method comparison (means + skill + win-rates)
+    # ----------------------------
+    print("\n===== METHOD COMPARISON (extended) =====")
     comparison = summarize_comparison(results)
-    comparison.to_csv("results/regime_similarity_comparison.csv", index=False)
     print(comparison)
+    comparison.to_csv("results/regime_similarity_comparison.csv", index=False)
 
     # ----------------------------
-    # Save
+    # One combined "report all" CSV
+    # (easy to read + paste into paper)
     # ----------------------------
-    os.makedirs("results", exist_ok=True)
+    report_rows = []
+
+    # (A) headline means (per method per metric)
+    for key in BASE:
+        for m in METHODS:
+            col = f"{m}_{key}"
+            if col in results.columns:
+                report_rows.append({
+                    "section": "headline_mean",
+                    "metric": key,
+                    "method": m,
+                    "value": float(np.nanmean(results[col].to_numpy(dtype=float))),
+                })
+
+    # (B) GMVP calibration
+    if calib_row:
+        report_rows.append(calib_row)
+
+    # (C) extended comparison table (already aggregated)
+    # store it in long format so it's a single CSV (no wide column explosion)
+    for _, r in comparison.iterrows():
+        metric = r["metric"]
+        for c in comparison.columns:
+            if c == "metric":
+                continue
+            report_rows.append({
+                "section": "comparison",
+                "metric": metric,
+                "method": c,          # e.g., 'model', 'skill_vs_pers', 'win_rate_vs_best', ...
+                "value": float(r[c]) if pd.notnull(r[c]) else np.nan,
+            })
+
+    report_df = pd.DataFrame(report_rows)
+    report_df.to_csv("results/regime_similarity_report.csv", index=False)
+
+    # ----------------------------
+    # Save full backtest outputs
+    # ----------------------------
     results.to_parquet("results/regime_similarity_backtest.parquet")
     results.to_csv("results/regime_similarity_backtest.csv")
+
     print("\nSaved:")
     print("  results/regime_similarity_backtest.parquet")
     print("  results/regime_similarity_backtest.csv")
+    print("  results/regime_similarity_headline_describe.csv")
+    print("  results/regime_similarity_multi_portfolio_describe.csv" if multi_cols else "  (no multi-portfolio describe)")
+    print("  results/regime_similarity_stability_describe.csv" if stab_cols else "  (no stability describe)")
+    print("  results/regime_similarity_comparison.csv")
+    print("  results/regime_similarity_report.csv")
+
 
 if __name__ == "__main__":
     main()

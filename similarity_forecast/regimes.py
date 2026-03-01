@@ -74,17 +74,55 @@ class RegimeModel:
         PI = PI / np.maximum(PI.sum(axis=1, keepdims=True), self.eps)
         return PI.astype(float)
 
-    def estimate_transition(self, PI: NDArray[np.floating]) -> NDArray[np.floating]:
+    def estimate_transition(
+        self,
+        PI: NDArray[np.floating],
+        mode: str = "hard",  # {"hard","soft"}
+        trans_smooth: Optional[float] = None,
+    ) -> NDArray[np.floating]:
         """
-        Estimate A from hard assignments s_t = argmax_k PI[t,k].
-        Uses Laplace smoothing with trans_smooth.
-        """
-        s = np.argmax(PI, axis=1).astype(int)
-        K = self.n_regimes
-        counts = np.full((K, K), float(self.trans_smooth), dtype=float)
+        Estimate Markov transition matrix A.
 
-        for t in range(1, s.shape[0]):
-            counts[s[t - 1], s[t]] += 1.0
+        Parameters
+        ----------
+        PI : array, shape [T, K]
+            Soft regime membership probabilities (rows sum to 1).
+        mode : {"hard","soft"}
+            - "hard": use hard labels s_t = argmax_k PI[t,k] and count transitions.
+            - "soft": use expected transition counts sum_t PI[t-1,i] * PI[t,j].
+        trans_smooth : float, optional
+            Laplace smoothing added to all transition counts. Defaults to self.trans_smooth.
+
+        Returns
+        -------
+        A : array, shape [K, K]
+            Row-stochastic transition matrix.
+        """
+        if mode not in {"hard", "soft"}:
+            raise ValueError(f"mode must be one of {{'hard','soft'}}, got {mode!r}")
+
+        PI = np.asarray(PI, dtype=float)
+        T, K = PI.shape
+        if K != self.n_regimes:
+            raise ValueError(f"PI has K={K}, but RegimeModel.n_regimes={self.n_regimes}")
+        if T < 2:
+            # trivial fallback: identity-ish
+            A = np.eye(K, dtype=float)
+            self.A_ = A
+            return A
+
+        lam = float(self.trans_smooth if trans_smooth is None else trans_smooth)
+        counts = np.full((K, K), lam, dtype=float)
+
+        if mode == "hard":
+            s = np.argmax(PI, axis=1).astype(int)
+            for t in range(1, T):
+                counts[s[t - 1], s[t]] += 1.0
+        else:
+            # expected transition counts: sum_{t=2..T} PI[t-1,i] PI[t,j]
+            # This is a simple “soft-count” estimator.
+            for t in range(1, T):
+                counts += np.outer(PI[t - 1], PI[t])
 
         A = _row_normalize(counts, eps=self.eps)
         self.A_ = A
