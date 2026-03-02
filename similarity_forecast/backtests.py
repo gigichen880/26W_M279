@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
-from .core import project_to_spd
+from .core import project_to_spd, cov_from_returns
 
 def frobenius_error(S_hat: NDArray[np.floating], S_true: NDArray[np.floating]) -> float:
     S_hat = np.asarray(S_hat, dtype=float)
@@ -286,20 +286,7 @@ def weight_concentration_stats(w: np.ndarray) -> dict[str, float]:
     return {"w_hhi": hhi, "w_max_abs": maxw, "w_l1": l1}
 
 def cov_from_window(window: np.ndarray, ddof: int = 1) -> np.ndarray:
-    """
-    Sample covariance from a (T, N) return window, pairwise handling via np.nan.
-    Note: np.cov does NOT handle nan; we do a simple nan->0 after demeaning with nanmean.
-    If you already have a robust cov_from_returns() in target_objects, reuse that instead.
-    """
-    X = window.astype(float)
-    mu = np.nanmean(X, axis=0, keepdims=True)
-    Xc = X - mu
-    Xc = np.nan_to_num(Xc, nan=0.0)
-    # effective sample size per pair is not accounted for here; for fairness,
-    # prefer using your CovarianceTarget / cov_from_returns if available.
-    S = (Xc.T @ Xc) / max(Xc.shape[0] - ddof, 1)
-    return (S + S.T) / 2.0
-
+    return cov_from_returns(window.astype(float), ddof=ddof)
 
 def baseline_rolling_cov(past: np.ndarray, ddof: int = 1) -> np.ndarray:
     return cov_from_window(past, ddof=ddof)

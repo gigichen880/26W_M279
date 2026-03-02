@@ -6,8 +6,7 @@ from typing import Protocol
 import numpy as np
 from numpy.typing import NDArray
 
-from .core import cov_from_returns, cov_from_returns_filtered, corr_from_cov, project_to_spd
-
+from .core import cov_from_returns, corr_from_cov, validate_window, project_to_spd
 
 class TargetObject(Protocol):
     """
@@ -18,45 +17,58 @@ class TargetObject(Protocol):
     def postprocess(self, y_hat: NDArray[np.floating]) -> NDArray[np.floating]: ...
 
 
+
 @dataclass(frozen=True)
 class CovarianceTarget:
     ddof: int = 1
     eps_spd: float = 1e-8
-    min_periods_ratio: float = 0.5
+    max_na_pct: float = 0.3
+    min_stocks_with_data_pct: float = 0.8
 
     def target(self, future_returns: NDArray[np.floating]) -> NDArray[np.floating]:
-        T = future_returns.shape[0]
-        na_pct = np.isnan(future_returns).sum() / future_returns.size
-        if na_pct > 0.5:
-            warnings.warn(
-                f"Future window has {na_pct:.1%} NAs, covariance may be unstable",
-                UserWarning,
-                stacklevel=2,
-            )
-        min_periods = max(2, int(T * self.min_periods_ratio))
-        cov = cov_from_returns(future_returns, ddof=self.ddof, min_periods=min_periods)
+        if not validate_window(
+            future_returns,
+            max_na_pct=self.max_na_pct,
+            min_stocks_pct=self.min_stocks_with_data_pct,
+        ):
+            raise ValueError("CovarianceTarget.target: future window failed validation.")
+        cov = cov_from_returns(future_returns, ddof=self.ddof)
         return project_to_spd(cov, eps=self.eps_spd)
-    
+
     def postprocess(self, y_hat: NDArray[np.floating]) -> NDArray[np.floating]:
         return project_to_spd(y_hat, eps=self.eps_spd)
-
 
 @dataclass(frozen=True)
 class CorrelationTarget:
     ddof: int = 1
     eps_spd: float = 1e-8
     eps_diag: float = 1e-12
-    min_periods_ratio: float = 0.5
+
+    # NA policy knobs (self-contained)
+    max_na_pct: float = 0.3
+    min_stocks_with_data_pct: float = 0.8
 
     def target(self, future_returns: NDArray[np.floating]) -> NDArray[np.floating]:
-        T = future_returns.shape[0]
-        min_periods = max(2, int(T * self.min_periods_ratio))
-        Sigma = cov_from_returns(future_returns, ddof=self.ddof, min_periods=min_periods)
+        # ---- Hard gate (consistent policy) ----
+        if not validate_window(
+            future_returns,
+            max_na_pct=self.max_na_pct,
+            min_stocks_pct=self.min_stocks_with_data_pct,
+        ):
+            raise ValueError("CorrelationTarget.target: future window failed validation.")
+
+        # ---- Consistent cov (impute + SPD) ----
+        Sigma = cov_from_returns(future_returns, ddof=self.ddof)
+
+        # ---- Correlation + SPD projection ----
         C = corr_from_cov(Sigma, eps=self.eps_diag)
         return project_to_spd(C, eps=self.eps_spd)
 
     def postprocess(self, y_hat: NDArray[np.floating]) -> NDArray[np.floating]:
+        # Ensure SPD first
         A = project_to_spd(y_hat, eps=self.eps_spd)
+
+        # Normalize to correlation-like (diag=1), then SPD-project again
         d = np.sqrt(np.maximum(np.diag(A), self.eps_diag))
         A = (A / d[None, :]) / d[:, None]
         return project_to_spd(A, eps=self.eps_spd)
@@ -68,12 +80,26 @@ class VolTarget:
     eps: float = 1e-12
     log: bool = True
 
+    # NA policy knobs (self-contained)
+    max_na_pct: float = 0.3
+    min_stocks_with_data_pct: float = 0.8
+
     def target(self, future_returns: NDArray[np.floating]) -> NDArray[np.floating]:
-        T = future_returns.shape[0]
-        min_periods = max(2, T // 2)
-        Sigma = cov_from_returns(future_returns, ddof=self.ddof, min_periods=min_periods)
+        # ---- Hard gate (consistent policy) ----
+        if not validate_window(
+            future_returns,
+            max_na_pct=self.max_na_pct,
+            min_stocks_pct=self.min_stocks_with_data_pct,
+        ):
+            raise ValueError("VolTarget.target: future window failed validation.")
+
+        # ---- Consistent cov (impute + SPD) ----
+        Sigma = cov_from_returns(future_returns, ddof=self.ddof)
+
+        # ---- Vol from diag ----
         v = np.sqrt(np.maximum(np.diag(Sigma), self.eps))
         return np.log(v) if self.log else v
 
     def postprocess(self, y_hat: NDArray[np.floating]) -> NDArray[np.floating]:
+        # vol target is vector, no SPD postprocessing needed
         return y_hat

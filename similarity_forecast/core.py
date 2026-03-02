@@ -50,78 +50,73 @@ from typing import Optional, Tuple
 from numpy.typing import NDArray
 from typing import Tuple
 
-def cov_from_returns_filtered(
+def impute_returns_window(
     R: NDArray[np.floating],
+    *,
+    fill_all_nan: float = 0.0,
+) -> NDArray[np.floating]:
+    """
+    Impute NaNs/non-finite in a returns window (T, N) using per-asset mean over time.
+    Assets with all-NaN over time are filled with fill_all_nan (default 0.0).
+
+    This is lookback-local (no lookahead) and produces a fully finite window.
+    """
+    X = np.asarray(R, dtype=float)
+    X = np.where(np.isfinite(X), X, np.nan)
+
+    # columns with at least one finite obs
+    col_has = np.isfinite(X).any(axis=0)  # (N,)
+
+    col_mean = np.full(X.shape[1], fill_all_nan, dtype=float)
+    if np.any(col_has):
+        col_mean[col_has] = np.nanmean(X[:, col_has], axis=0)
+
+    nan_i, nan_j = np.where(np.isnan(X))
+    if nan_i.size > 0:
+        X[nan_i, nan_j] = col_mean[nan_j]
+
+    return np.nan_to_num(X, nan=fill_all_nan, posinf=fill_all_nan, neginf=fill_all_nan)
+
+
+def cov_from_returns_imputed(
+    R: NDArray[np.floating],
+    *,
     ddof: int = 1,
-    min_periods: Optional[int] = None,
-    min_frac: float = 0.8,
     ridge: float = 1e-8,
-) -> Tuple[NDArray[np.floating], NDArray[np.bool_]]:
+) -> NDArray[np.floating]:
     """
-    Window-wise filter assets then compute covariance on the kept subset.
-    Returns: (cov_small, mask)
+    Fixed-shape covariance from returns using a single NA policy:
+      - impute window (per-asset mean; all-NaN -> 0)
+      - demean
+      - sample covariance
+      - add ridge
+      - SPD project
     """
-    T, N = R.shape
-    if min_periods is None:
-        min_periods = max(2, int(np.ceil(min_frac * T)))
-
-    obs = np.sum(~np.isnan(R), axis=0)
-    mask = obs >= min_periods
-    if mask.sum() < 2:
-        raise ValueError(f"Not enough assets with >= {min_periods} obs (kept {mask.sum()} / {N}).")
-
-    X = R[:, mask].astype(float)
-    good_rows = ~np.isnan(X).any(axis=1)
-    X = X[good_rows]
-    T_eff = X.shape[0]
-    if T_eff <= ddof:
-        raise ValueError(f"Not enough complete rows after filtering (T_eff={T_eff}, ddof={ddof}).")
+    X = impute_returns_window(R, fill_all_nan=0.0)
+    T, N = X.shape
+    denom = max(1, T - ddof)
 
     X = X - X.mean(axis=0, keepdims=True)
-    cov = (X.T @ X) / max(1, T_eff - ddof)
-    cov = cov + ridge * np.eye(cov.shape[0], dtype=float)
+    cov = (X.T @ X) / denom
+    if ridge > 0:
+        cov = cov + float(ridge) * np.eye(N, dtype=float)
 
-    cov = project_to_spd(cov)
-    return cov.astype(float), mask
+    return project_to_spd(cov).astype(float)
 
 def cov_from_returns(
     R: NDArray[np.floating],
     ddof: int = 1,
-    min_periods: Optional[int] = None,
+    min_periods: Optional[int] = None,  # kept for API compatibility; no longer used
 ) -> NDArray[np.floating]:
     """
-    Fixed-shape covariance from returns.
+    Fixed-shape covariance from returns (T, N) with NaNs allowed.
 
-    R: (T, N) with NaNs allowed.
-    Returns: (N, N) covariance (SPD-projected). Always NxN.
+    CONSISTENT POLICY:
+      - windows are expected to be validated upstream (validate_window)
+      - remaining NaNs are imputed by per-asset mean (all-NaN assets -> 0)
+      - covariance is computed on the imputed window, ridge-added, SPD-projected
     """
-    T, N = R.shape
-    if min_periods is None:
-        min_periods = max(2, T // 2)
-
-    if not np.isnan(R).any():
-        X = R - R.mean(axis=0, keepdims=True)
-        denom = max(1, T - ddof)
-        cov = (X.T @ X) / denom
-    else:
-        # pairwise-complete covariance, always NxN
-        df = pd.DataFrame(R)
-        cov = df.cov(min_periods=min_periods, ddof=ddof).to_numpy()
-
-        if np.isnan(cov).any():
-            n_valid = int((~np.isnan(cov)).sum())
-            warnings.warn(
-                f"Covariance has NaNs. Only {n_valid} / {N*N} entries valid. "
-                f"Filling remaining with 0 then SPD-projecting. "
-                f"(Try increasing min_periods or filtering assets/windows.)",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        cov = np.nan_to_num(cov, nan=0.0, posinf=0.0, neginf=0.0)
-
-    cov = project_to_spd(cov)
-    return cov.astype(float)
+    return cov_from_returns_imputed(R, ddof=ddof, ridge=1e-8)
 
 def corr_from_cov(Sigma: NDArray[np.floating], eps: float = 1e-12) -> NDArray[np.floating]:
     d = np.sqrt(np.maximum(np.diag(Sigma), eps))

@@ -6,8 +6,11 @@ from typing import Protocol, Optional
 import numpy as np
 from numpy.typing import NDArray
 
-from .core import cov_from_returns, corr_from_cov, cov_from_returns_filtered, project_to_spd
+from .core import cov_from_returns, corr_from_cov, impute_returns_window, validate_window
 
+import pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 class WindowEmbedder(Protocol):
     """
@@ -19,49 +22,36 @@ class WindowEmbedder(Protocol):
     @property
     def dim(self) -> int: ...
 
-
 @dataclass(frozen=True)
 class CorrEigenEmbedder:
-    """
-    Compute correlation on the lookback window, then embed by top-k log eigenvalues.
-    Handles NAs via pairwise-complete covariance; falls back to complete-case or zero if needed.
-    """
     k: int
     ddof: int = 1
     eps: float = 1e-12
-    min_periods_ratio: float = 0.5
+    max_na_pct: float = 0.3
+    min_stocks_with_data_pct: float = 0.8
 
     def embed(self, past_returns: NDArray[np.floating]) -> NDArray[np.floating]:
-        T, N = past_returns.shape
-        min_periods = max(2, int(T * self.min_periods_ratio))
-        try:
-            Sigma, _ = cov_from_returns_filtered(
-                past_returns,
-                ddof=self.ddof,
-                min_periods=min_periods,
-                min_frac=0.8,
-            )
-            n_eff = Sigma.shape[0]
-            if n_eff < self.k:
-                warnings.warn(
-                    f"CorrEigenEmbedder: only {n_eff} assets after filtering (< k={self.k}); using zero embedding",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                return np.zeros(self.k, dtype=float)
-
-            C = corr_from_cov(Sigma, eps=self.eps)
-            w = np.linalg.eigvalsh(C)
-            w = np.maximum(w, self.eps)[::-1][: self.k]
-            return np.log(w)
-
-        except Exception as e:
-            warnings.warn(f"Embedding failed: {e}, using zeros", UserWarning, stacklevel=2)
+        if not validate_window(
+            past_returns,
+            max_na_pct=self.max_na_pct,
+            min_stocks_pct=self.min_stocks_with_data_pct,
+        ):
             return np.zeros(self.k, dtype=float)
+
+        T, N = past_returns.shape
+        if N < self.k:
+            return np.zeros(self.k, dtype=float)
+
+        Sigma = cov_from_returns(past_returns, ddof=self.ddof)   # now impute+SPD inside
+        C = corr_from_cov(Sigma, eps=self.eps)
+
+        w = np.linalg.eigvalsh(C)
+        w = np.maximum(w, self.eps)[::-1][: self.k]
+        return np.log(w)
+
     @property
     def dim(self) -> int:
         return self.k
-
 
 @dataclass(frozen=True)
 class VolStatsEmbedder:
@@ -134,6 +124,8 @@ class HybridStateEmbedder:
 
     def embed(self, X):
         X = np.asarray(X, dtype=float)
+        X = impute_returns_window(X, fill_all_nan=0.0)
+
         L, N = X.shape
 
         # --------
@@ -198,11 +190,6 @@ class HybridStateEmbedder:
         ])
         return z
     
-import numpy as np
-import pandas as pd
-
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
 
 
 class PCAWindowEmbedder:
@@ -322,7 +309,7 @@ class PCAWindowEmbedder:
                     )
                 continue
 
-            past = self._impute_window(past)
+            past = impute_returns_window(past, fill_all_nan=0.0)
             past = self._prep_window(past)
             X_list.append(past.reshape(-1))
 
@@ -350,7 +337,7 @@ class PCAWindowEmbedder:
         if self.pca_ is None:
             raise RuntimeError("PCAWindowEmbedder: not fitted. Call fit(returns_df) first.")
 
-        past = np.asarray(past, dtype=float)
+        past = impute_returns_window(past, fill_all_nan=0.0)
         L, N = past.shape
         if self.L_ is not None and (L != self.L_ or N != self.N_):
             raise ValueError(f"PCAWindowEmbedder.embed: expected ({self.L_},{self.N_}), got ({L},{N})")
