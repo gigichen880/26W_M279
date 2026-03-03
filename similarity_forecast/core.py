@@ -141,13 +141,16 @@ def validate_window(
         True if window is valid, False otherwise
     """
     T, N = returns_window.shape
-    na_pct = np.isnan(returns_window).sum() / (T * N)
+    mask_bad = ~np.isfinite(returns_window)
+    na_pct = mask_bad.sum() / (T*N)
     if na_pct > max_na_pct:
         return False
-    stocks_with_data = (~np.isnan(returns_window).all(axis=0)).sum()
+    
+    stocks_with_data = (~mask_bad).any(axis=0).sum()
     if stocks_with_data / N < min_stocks_pct:
         return False
-    times_with_data = (~np.isnan(returns_window).all(axis=1)).sum()
+    
+    times_with_data  = (~mask_bad).any(axis=1).sum()
     if times_with_data / T < 0.5:
         return False
     return True
@@ -191,19 +194,6 @@ class ExactKNN:
 
 class Weighting(Protocol):
     def weights(self, distances: NDArray[np.floating]) -> NDArray[np.floating]: ...
-
-
-@dataclass(frozen=True)
-class RBFWeighting:
-    tau: float = 1.0
-    eps: float = 1e-12
-
-    def weights(self, distances: NDArray[np.floating]) -> NDArray[np.floating]:
-        d2 = distances * distances
-        w = np.exp(-d2 / max(self.tau, self.eps))
-        s = w.sum()
-        return w / max(s, self.eps)
-
 
 @dataclass(frozen=True)
 class InverseDistanceWeighting:
@@ -256,3 +246,15 @@ class LogEuclideanSPDMean:
         for i in range(targets.shape[0]):
             S += w[i] * logm_spd(project_to_spd(targets[i], eps=self.eps_spd))
         return project_to_spd(expm_sym(S), eps=self.eps_spd)
+    
+
+@dataclass(frozen=True)
+class ArithmeticSPDMean:
+    """
+    Simple weighted arithmetic mean of SPD matrices, then project to SPD.
+    """
+    eps_spd: float = 1e-8
+
+    def aggregate(self, targets: NDArray[np.floating], w: NDArray[np.floating]) -> NDArray[np.floating]:
+        S = np.tensordot(w, targets, axes=(0, 0))
+        return project_to_spd((S + S.T) / 2.0, eps=self.eps_spd)

@@ -277,7 +277,6 @@ def multi_portfolio_risk_errors(
     mae_log = float(np.mean(np.abs(log_err)))
     return {"port_mse_var": mse_var, "port_mse_logvar": mse_log, "port_mae_logvar": mae_log}
 
-
 def weight_concentration_stats(w: np.ndarray) -> dict[str, float]:
     w = np.asarray(w, dtype=float).reshape(-1)
     hhi = float(np.sum(w ** 2))
@@ -285,11 +284,8 @@ def weight_concentration_stats(w: np.ndarray) -> dict[str, float]:
     l1 = float(np.sum(np.abs(w)))
     return {"w_hhi": hhi, "w_max_abs": maxw, "w_l1": l1}
 
-def cov_from_window(window: np.ndarray, ddof: int = 1) -> np.ndarray:
-    return cov_from_returns(window.astype(float), ddof=ddof)
-
 def baseline_rolling_cov(past: np.ndarray, ddof: int = 1) -> np.ndarray:
-    return cov_from_window(past, ddof=ddof)
+    return cov_from_returns(past, ddof=ddof)
 
 
 def baseline_persistence_realized_cov(R: np.ndarray, raw_anchor: int, horizon: int, ddof: int = 1) -> np.ndarray:
@@ -297,8 +293,7 @@ def baseline_persistence_realized_cov(R: np.ndarray, raw_anchor: int, horizon: i
     Uses the previous horizon window [t-H+1 ... t] as the forecast for [t+1 ... t+H].
     """
     prev = R[raw_anchor - horizon + 1 : raw_anchor + 1, :]
-    return cov_from_window(prev, ddof=ddof)
-
+    return cov_from_returns(prev, ddof=ddof)
 
 def baseline_shrink_to_diag(S: np.ndarray, gamma: float = 0.3) -> np.ndarray:
     D = np.diag(np.diag(S))

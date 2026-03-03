@@ -15,7 +15,7 @@ from similarity_forecast.backtests import (
 )
 from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder
 from similarity_forecast.target_objects import CovarianceTarget
-from similarity_forecast.core import LogEuclideanSPDMean, validate_window, project_to_spd
+from similarity_forecast.core import LogEuclideanSPDMean, ArithmeticSPDMean, validate_window, project_to_spd
 from similarity_forecast.regimes import RegimeModel
 from similarity_forecast.pipeline import RegimeAwareSimilarityForecaster
 from similarity_forecast.regime_weighting import RegimeAwareWeights
@@ -38,19 +38,6 @@ def debug_R_at(R, t, date=None, tag=""):
         "row_mean", float(np.mean(x)),
         "n", int(x.size),
     )
-
-
-
-@dataclasses.dataclass(frozen=True)
-class ArithmeticSPDMean:
-    """
-    Simple weighted arithmetic mean of SPD matrices, then project to SPD.
-    """
-    eps_spd: float = 1e-8
-
-    def aggregate(self, targets: NDArray[np.floating], w: NDArray[np.floating]) -> NDArray[np.floating]:
-        S = np.tensordot(w, targets, axes=(0, 0))
-        return project_to_spd((S + S.T) / 2.0, eps=self.eps_spd)
     
 def build_model(
     lookback: int = 60,
@@ -73,7 +60,8 @@ def build_model(
         verbose_skip=False,
     )
     target = CovarianceTarget(ddof=ddof)
-    aggregator = ArithmeticSPDMean(eps_spd=1e-8)
+    # aggregator = ArithmeticSPDMean(eps_spd=1e-8)
+    aggregator = LogEuclideanSPDMean(eps_spd=1e-8)
     regime_model = RegimeModel(n_regimes=n_regimes, random_state=random_state)
     return RegimeAwareSimilarityForecaster(
         embedder=embedder,

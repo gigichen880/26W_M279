@@ -1,3 +1,4 @@
+# similarity_forecast/embeddings.py
 from __future__ import annotations
 
 import warnings
@@ -31,13 +32,6 @@ class CorrEigenEmbedder:
     min_stocks_with_data_pct: float = 0.8
 
     def embed(self, past_returns: NDArray[np.floating]) -> NDArray[np.floating]:
-        if not validate_window(
-            past_returns,
-            max_na_pct=self.max_na_pct,
-            min_stocks_pct=self.min_stocks_with_data_pct,
-        ):
-            return np.zeros(self.k, dtype=float)
-
         T, N = past_returns.shape
         if N < self.k:
             return np.zeros(self.k, dtype=float)
@@ -267,24 +261,6 @@ class PCAWindowEmbedder:
             )
         )
 
-    def _impute_window(self, X: np.ndarray) -> np.ndarray:
-        X = np.asarray(X, dtype=float)
-        X = np.where(np.isfinite(X), X, np.nan)
-
-        # which columns have at least one finite value?
-        col_has = np.isfinite(X).any(axis=0)  # (N,)
-
-        col_mean = np.zeros(X.shape[1], dtype=float)
-        if np.any(col_has):
-            col_mean[col_has] = np.nanmean(X[:, col_has], axis=0)  # no empty-slice warning
-
-        # fill NaNs with column means (0 for all-NaN columns)
-        nan_i, nan_j = np.where(np.isnan(X))
-        if nan_i.size > 0:
-            X[nan_i, nan_j] = col_mean[nan_j]
-
-        return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-
     def fit(self, returns_df: pd.DataFrame) -> "PCAWindowEmbedder":
         R = returns_df.to_numpy(dtype=float)  # [T,N]
         self.L_, self.N_ = self.lookback, R.shape[1]
@@ -352,7 +328,7 @@ class PCAWindowEmbedder:
                 f"(na_pct={na_pct:.3f}, stocks_pct={stocks_pct:.3f}, times_pct={times_pct:.3f})"
             )
 
-        Xw = self._impute_window(past)
+        Xw = impute_returns_window(past, fill_all_nan=0.0)
         Xw = self._prep_window(Xw)
 
         # (1) global PCA coords on flattened window
