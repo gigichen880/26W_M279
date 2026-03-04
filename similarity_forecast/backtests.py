@@ -363,3 +363,129 @@ def eval_all_metrics(
     out.update(weight_concentration_stats(w))
     out.update(multi_portfolio_risk_errors(Sigma_hat=S_hat, Sigma_true=S_true, W_eval=W_eval))
     return out
+
+# GMVP Portfolio Testings
+def _project_to_simplex(v: NDArray[np.floating]) -> NDArray[np.floating]:
+    """
+    Euclidean projection onto simplex {w >= 0, sum w = 1}.
+    """
+    v = np.asarray(v, dtype=float)
+    n = v.size
+    u = np.sort(v)[::-1]
+    cssv = np.cumsum(u) - 1.0
+    ind = np.arange(1, n + 1)
+    cond = u - cssv / ind > 0
+    if not np.any(cond):
+        # fallback: uniform
+        return np.ones(n) / n
+    rho = ind[cond][-1]
+    theta = cssv[cond][-1] / rho
+    w = np.maximum(v - theta, 0.0)
+    s = w.sum()
+    return w / s if s > 0 else np.ones(n) / n
+
+def gmvp_weights(
+    Sigma: NDArray[np.floating],
+    long_only: bool = False,
+    ridge: float = 1e-8,
+    max_iter: int = 500,
+    step: float = 0.5,
+    tol: float = 1e-10,
+) -> NDArray[np.floating]:
+    """
+    GMVP weights for covariance Sigma.
+
+    Unconstrained: closed form  w ∝ Sigma^{-1} 1
+    Long-only: projected gradient descent on simplex.
+
+    Notes:
+      - Adds ridge to improve conditioning.
+      - Assumes Sigma is SPD-ish (you already project_to_spd elsewhere).
+    """
+    Sigma = np.asarray(Sigma, dtype=float)
+    n = Sigma.shape[0]
+    I = np.eye(n)
+
+    S = Sigma + ridge * I
+    ones = np.ones(n)
+
+    if not long_only:
+        # closed form
+        try:
+            x = np.linalg.solve(S, ones)
+        except np.linalg.LinAlgError:
+            x = np.linalg.pinv(S) @ ones
+        denom = float(ones @ x)
+        if not np.isfinite(denom) or abs(denom) < 1e-18:
+            return np.ones(n) / n
+        w = x / denom
+        return w.astype(float)
+
+    # long-only: projected gradient descent on simplex
+    w = np.ones(n) / n
+    prev_obj = np.inf
+    for _ in range(max_iter):
+        grad = 2.0 * (S @ w)
+        w_new = _project_to_simplex(w - step * grad)
+
+        obj = float(w_new @ S @ w_new)
+        if not np.isfinite(obj):
+            return np.ones(n) / n
+
+        if abs(prev_obj - obj) < tol:
+            w = w_new
+            break
+
+        # simple monotone step: if objective increases, shrink step
+        if obj > prev_obj:
+            step *= 0.5
+            if step < 1e-12:
+                break
+            continue
+
+        w = w_new
+        prev_obj = obj
+
+    return w.astype(float)
+
+def hold_period_portfolio_stats(
+    fut: NDArray[np.floating],     # (H, N) future returns
+    w: NDArray[np.floating],       # (N,)
+    ann_factor: float = 252.0,
+) -> dict:
+    """
+    Compute realized performance over the horizon holding w fixed.
+
+    Returns:
+      - daily portfolio return series stats
+      - cumulative return over horizon
+      - realized variance/vol (per-day)
+      - annualized sharpe (rough)
+    """
+    fut = np.asarray(fut, dtype=float)
+    w = np.asarray(w, dtype=float)
+
+    rp = fut @ w  # (H,)
+    rp = rp[np.isfinite(rp)]
+    if rp.size == 0:
+        return {
+            "gmvp_cumret": np.nan,
+            "gmvp_mean": np.nan,
+            "gmvp_vol": np.nan,
+            "gmvp_var": np.nan,
+            "gmvp_sharpe": np.nan,
+        }
+
+    cumret = float(np.prod(1.0 + rp) - 1.0)
+    mu = float(np.mean(rp))
+    var = float(np.var(rp, ddof=1)) if rp.size > 1 else 0.0
+    vol = float(np.sqrt(var))
+    sharpe = float((mu / (vol + 1e-12)) * np.sqrt(ann_factor)) if vol > 0 else np.nan
+
+    return {
+        "gmvp_cumret": cumret,
+        "gmvp_mean": mu,
+        "gmvp_vol": vol,
+        "gmvp_var": var,
+        "gmvp_sharpe": sharpe,
+    }

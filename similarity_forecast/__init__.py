@@ -32,7 +32,6 @@ from .core import (
 
     # weighting
     Weighting,
-    RBFWeighting,
     InverseDistanceWeighting,
     RankWeighting,
 
@@ -102,7 +101,6 @@ __all__ = [
     "validate_window",
     "ExactKNN",
     "Weighting",
-    "RBFWeighting",
     "InverseDistanceWeighting",
     "RankWeighting",
     "Aggregator",

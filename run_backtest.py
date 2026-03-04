@@ -11,7 +11,9 @@ from similarity_forecast.backtests import (
     eval_all_metrics,
     baseline_rolling_cov,
     baseline_persistence_realized_cov,
-    baseline_shrink_to_diag
+    baseline_shrink_to_diag,
+    gmvp_weights,
+    hold_period_portfolio_stats,
 )
 from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder
 from similarity_forecast.target_objects import CovarianceTarget
@@ -75,6 +77,14 @@ def build_model(
         trans_smooth=trans_smooth,           
     )
 
+def trace_ratio_guardrail(S_hat, S_ref, lo=0.2, hi=5.0) -> tuple[bool, float]:
+    tr_hat = float(np.trace(S_hat))
+    tr_ref = float(np.trace(S_ref))
+    if (not np.isfinite(tr_hat)) or (not np.isfinite(tr_ref)) or tr_ref <= 0:
+        return True, np.nan
+    r = tr_hat / tr_ref
+    return (r > hi), r
+
 def run_backtest(
     returns_df: pd.DataFrame,
     lookback: int = 60,
@@ -114,6 +124,11 @@ def run_backtest(
 
     # weight stability tracking (min-var)
     w_prev: np.ndarray | None = None
+
+    w_prev_model = None
+    w_prev_roll = None
+    w_prev_pers = None
+    w_prev_shrk = None
 
     for raw_anchor in range(raw_anchor_start, raw_anchor_end + 1):
         if (model is None) or (last_refit_raw_anchor is None) or (raw_anchor - last_refit_raw_anchor >= refit_every):
@@ -157,7 +172,6 @@ def run_backtest(
             if verbose:
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} prediction failed: {e}")
             continue
-        Sigma_hat = np.asarray(Sigma_hat, dtype=float)
 
         fut = R[raw_anchor + 1 : raw_anchor + horizon + 1, :]  # (H, N)
         if not validate_window(fut, max_na_pct=0.3, min_stocks_pct=0.8):
@@ -173,24 +187,97 @@ def run_backtest(
             continue
         Sigma_true = np.asarray(Sigma_true, dtype=float)
 
-        # --- OUR MODEL ---
+        Sigma_hat = np.asarray(Sigma_hat, dtype=float)
+
+        # Baseline: rolling cov (past-only)
+        S_roll = baseline_rolling_cov(past, ddof=1)
+        S_roll = project_to_spd((S_roll + S_roll.T) / 2.0, eps=1e-8)
+
+        # Baseline: persistence realized cov (past-only, since it uses returns up to t)
+        S_pers = baseline_persistence_realized_cov(R, raw_anchor=raw_anchor, horizon=horizon, ddof=1)
+        S_pers = project_to_spd((S_pers + S_pers.T) / 2.0, eps=1e-8)
+
+        # Baseline: shrink-to-diag (past-only)
+        S_shrink = baseline_shrink_to_diag(S_roll, gamma=0.3)
+
+        # ----------------------------
+        # (A) TRUE GMVP HOLD-OUT BACKTEST
+        # ----------------------------
+        # weights computed at time t from each covariance estimate
+        w_model = gmvp_weights(Sigma_hat, long_only=long_only)
+        w_roll  = gmvp_weights(S_roll,    long_only=long_only)
+        w_pers  = gmvp_weights(S_pers,    long_only=long_only)
+        w_shrk  = gmvp_weights(S_shrink,  long_only=long_only)
+
+        # turnover (L1) vs previous period (per method)
+        # keep separate prev weights per method
+        # (add these variables above loop: w_prev_model, w_prev_roll, w_prev_pers, w_prev_shrk = None)
+        def _turnover(w_prev, w_now):
+            if w_prev is None:
+                return np.nan
+            return float(np.sum(np.abs(w_now - w_prev)))
+
+        turn_model = _turnover(w_prev_model, w_model)
+        turn_roll  = _turnover(w_prev_roll,  w_roll)
+        turn_pers  = _turnover(w_prev_pers,  w_pers)
+        turn_shrk  = _turnover(w_prev_shrk,  w_shrk)
+
+        w_prev_model, w_prev_roll, w_prev_pers, w_prev_shrk = w_model, w_roll, w_pers, w_shrk
+
+        # realized hold-period stats using actual future returns fut
+        s_model = hold_period_portfolio_stats(fut=fut, w=w_model)
+        s_roll  = hold_period_portfolio_stats(fut=fut, w=w_roll)
+        s_pers  = hold_period_portfolio_stats(fut=fut, w=w_pers)
+        s_shrk  = hold_period_portfolio_stats(fut=fut, w=w_shrk)
+
+        # attach into row with prefixes
+        for k, v in s_model.items(): row[f"model_{k}"] = v
+        for k, v in s_roll.items():  row[f"roll_{k}"]  = v
+        for k, v in s_pers.items():  row[f"pers_{k}"]  = v
+        for k, v in s_shrk.items():  row[f"shrink_{k}"] = v
+
+        row["model_turnover_l1"] = turn_model
+        row["roll_turnover_l1"]  = turn_roll
+        row["pers_turnover_l1"]  = turn_pers
+        row["shrink_turnover_l1"] = turn_shrk
+
+        # optional: weight concentration diagnostics for the strategy weights
+        def _hhi(w): return float(np.sum(np.square(w)))
+        def _wmax(w): return float(np.max(np.abs(w)))
+        def _wl1(w): return float(np.sum(np.abs(w)))
+
+        row["model_w_hhi"] = _hhi(w_model)
+        row["model_w_max_abs"] = _wmax(w_model)
+        row["model_w_l1"] = _wl1(w_model)
+
+        row["roll_w_hhi"] = _hhi(w_roll)
+        row["roll_w_max_abs"] = _wmax(w_roll)
+        row["roll_w_l1"] = _wl1(w_roll)
+
+        row["pers_w_hhi"] = _hhi(w_pers)
+        row["pers_w_max_abs"] = _wmax(w_pers)
+        row["pers_w_l1"] = _wl1(w_pers)
+
+        row["shrink_w_hhi"] = _hhi(w_shrk)
+        row["shrink_w_max_abs"] = _wmax(w_shrk)
+        row["shrink_w_l1"] = _wl1(w_shrk)
+
+        # ---- guardrail (NO lookahead) ----
+        use_ref = S_roll
+        bad, ratio = trace_ratio_guardrail(Sigma_hat, use_ref, lo=0.2, hi=5.0)
+        if bad:
+            if verbose:
+                print(f"[guardrail] {anchor_date.date()} trace_ratio={ratio} -> fallback shrink")
+            Sigma_hat = S_shrink
+
+        # compute metrics
         m = eval_all_metrics(Sigma_hat, Sigma_true, fut=fut, long_only=long_only, W_eval=W_eval)
         m = {f"model_{k}": v for k, v in m.items()}
 
-        # --- BASELINE: rolling cov ---
-        S_roll = baseline_rolling_cov(past, ddof=1)   # or use your CovarianceTarget
+        # Baseline metrics
         b1 = eval_all_metrics(S_roll, Sigma_true, fut=fut, long_only=long_only, W_eval=W_eval)
-        b1 = {f"roll_{k}": v for k, v in b1.items()}
-
-        # --- BASELINE: persistence (prev horizon realized) ---
-        S_pers = baseline_persistence_realized_cov(R, raw_anchor=raw_anchor, horizon=horizon, ddof=1)
         b2 = eval_all_metrics(S_pers, Sigma_true, fut=fut, long_only=long_only, W_eval=W_eval)
-        b2 = {f"pers_{k}": v for k, v in b2.items()}
-
-        # --- BASELINE: shrink-to-diag on rolling ---
-        S_shrink = baseline_shrink_to_diag(project_to_spd((S_roll + S_roll.T) / 2.0, eps=1e-8), gamma=0.3)
         b3 = eval_all_metrics(S_shrink, Sigma_true, fut=fut, long_only=long_only, W_eval=W_eval)
-        b3 = {f"shrink_{k}": v for k, v in b3.items()}
 
         row = {"date": anchor_date, "raw_anchor": raw_anchor, **m, **b1, **b2, **b3}
 
@@ -318,15 +405,15 @@ def main():
         max_thresh=1.0,
         min_non_nan_frac=0.2,
     ).T
-    print(returns_df.head())
+    # print(returns_df.head())
     returns_df.index = pd.to_datetime(returns_df.index)
 
     results = run_backtest(
         returns_df=returns_df,
         lookback=40,
         horizon=30,
-        start_date="2015-01-01",
-        end_date="2018-5-31",
+        start_date="2008-01-01",
+        end_date="2021-12-31",
         k_neighbors=10,
         refit_every=5,
         long_only=False,
