@@ -124,9 +124,11 @@ def run_backtest(
     raw_anchor_end = T - horizon - 1
     min_samples_for_gmm = 50
 
+    refit_every_days = 40
+    last_refit_date = None  
+
     rows = []
     model: RegimeAwareSimilarityForecaster | None = None
-    last_refit_raw_anchor: int | None = None
 
     # GMVP stability tracking per method
     w_prev = {"model": None, "mix": None, "roll": None, "pers": None, "shrink": None}
@@ -141,15 +143,19 @@ def run_backtest(
     def _wl1(w):  return float(np.sum(np.abs(w)))
 
     for raw_anchor in range(raw_anchor_start, raw_anchor_end + 1):
-        if stride > 1:
-            # apply stride to reduce number of evaluation points
-            if (raw_anchor - raw_anchor_start) % stride != 0:
-                continue
+        if stride > 1 and (raw_anchor - raw_anchor_start) % stride != 0:
+            continue
+
+        anchor_date = dates[raw_anchor] 
 
         # ----------------------------
         # (0) Refit model occasionally (walk-forward)
         # ----------------------------
-        if (model is None) or (last_refit_raw_anchor is None) or (raw_anchor - last_refit_raw_anchor >= refit_every):
+        if (
+            model is None
+            or last_refit_date is None
+            or (anchor_date - last_refit_date).days >= refit_every_days
+        ):
             train_df = df.iloc[: raw_anchor + 1]
             model = build_model(
                 lookback=lookback,
@@ -171,12 +177,11 @@ def run_backtest(
                 model = None
                 continue
 
-            last_refit_raw_anchor = raw_anchor
+            last_refit_date = anchor_date 
             if verbose:
                 print(f"        samples_T0={len(model.anchor_dates_)}")
 
         assert model is not None
-        anchor_date = dates[raw_anchor]
 
         # ----------------------------
         # (1) Build past + future windows
@@ -383,7 +388,7 @@ def main():
         returns_df=returns_df,
         lookback=40,
         horizon=30,
-        start_date="2019-01-01",
+        start_date="2015-01-01",
         end_date="2021-12-31",
         k_neighbors=10,
         refit_every=5,
