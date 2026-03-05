@@ -506,6 +506,32 @@ def run_backtest(
 
     return pd.DataFrame(rows).set_index("date").sort_index()
 
+def build_report_table(results_df):
+    rows = []
+
+    def add(section, metric, method, value):
+        rows.append({
+            "section": section,
+            "metric": metric,
+            "method": method,
+            "value": float(value)
+        })
+
+    methods = ["model", "mix", "roll", "pers", "shrink"]
+
+    for m in methods:
+        add("cov_error_mean", "fro", m, results_df[f"{m}_fro"].mean())
+        add("cov_error_mean", "kl", m, results_df[f"{m}_kl"].mean())
+        add("cov_error_mean", "stein", m, results_df[f"{m}_stein"].mean())
+        add("cov_error_mean", "logeuc", m, results_df[f"{m}_logeuc"].mean())
+
+        add("gmvp_mean", "gmvp_mean", m, results_df[f"{m}_gmvp_mean"].mean())
+        add("gmvp_mean", "gmvp_var", m, results_df[f"{m}_gmvp_var"].mean())
+        add("gmvp_mean", "gmvp_vol", m, results_df[f"{m}_gmvp_vol"].mean())
+        add("gmvp_mean", "gmvp_sharpe", m, results_df[f"{m}_gmvp_sharpe"].mean())
+        add("gmvp_mean", "turnover_l1", m, results_df[f"{m}_turnover_l1"].mean())
+
+    return pd.DataFrame(rows)
 
 # ----------------------------
 # CLI
@@ -616,6 +642,11 @@ def main():
     print(f"  {outdir}/{tag}_backtest.parquet")
     print(f"  {outdir}/{tag}_backtest.csv")
     print(f"  {outdir}/{tag}_config_used.yaml")
+
+    report_df = build_report_table(results)
+    report_path = os.path.join(outdir, "regime_similarity_report.csv")
+    report_df.to_csv(report_path, index=False)
+    print(f"Saved report summary: {report_path}")
 
 
 if __name__ == "__main__":

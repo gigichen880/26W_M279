@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
+import os
+import matplotlib.pyplot as plt
 
 import numpy as np
 import pandas as pd
@@ -14,6 +16,19 @@ from .core import ExactKNN, Aggregator, validate_window
 from .regimes import RegimeModel
 from .regime_weighting import RegimeAwareWeights
 
+
+def _entropy_rows(P: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    P = np.clip(P, eps, 1.0)
+    P = P / P.sum(axis=1, keepdims=True)
+    return -(P * np.log(P)).sum(axis=1)
+
+
+def _normalize_given_switch(A: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    A2 = A.copy()
+    np.fill_diagonal(A2, 0.0)
+    rs = A2.sum(axis=1, keepdims=True)
+    rs = np.where(rs < eps, 1.0, rs)
+    return A2 / rs
 
 
 @dataclass
@@ -309,3 +324,128 @@ class RegimeAwareSimilarityForecaster:
 
         yhat = np.tensordot(alpha, YK, axes=(0, 0))
         return self.target_object.postprocess(yhat)
+
+    def save_regime_diagnostics(
+        self,
+        out_dir: str,
+        prefix: str = "regime",
+        topk: int = 3,
+        dpi: int = 180,
+    ) -> None:
+        """
+        Save regime visuals for π_t, α_t, and transition matrix A.
+
+        Creates:
+        1) stripes: argmax π vs argmax α over time (anchor timeline)
+        2) entropy: H(π) vs H(α) over time
+        3) topk: top-k α probabilities over time
+        4) A heatmap
+        5) A_given_switch heatmap (diag removed + row-normalized)
+        """
+        self._check_fitted()
+        assert self.PI_ is not None and self.ALPHA_ is not None and self.A_ is not None
+
+        os.makedirs(out_dir, exist_ok=True)
+
+        # dates aligned to PI_/ALPHA_ (anchor timeline)
+        if self.anchor_dates_ is not None:
+            x = self.anchor_dates_
+            xlab = "date"
+            use_dates = True
+        else:
+            x = np.arange(self.PI_.shape[0])
+            xlab = "anchor index"
+            use_dates = False
+
+        pi = self.PI_
+        a = self.ALPHA_
+        A = self.A_
+
+        # -------------------------
+        # (1) regime stripes
+        # -------------------------
+        s_pi = np.argmax(pi, axis=1)
+        s_a  = np.argmax(a, axis=1)
+
+        fig, ax = plt.subplots(2, 1, figsize=(12, 2.6), sharex=True)
+        ax[0].imshow(s_pi[None, :], aspect="auto", interpolation="nearest")
+        ax[0].set_yticks([])
+        ax[0].set_ylabel("argmax π")
+
+        ax[1].imshow(s_a[None, :], aspect="auto", interpolation="nearest")
+        ax[1].set_yticks([])
+        ax[1].set_ylabel("argmax α")
+
+        if use_dates:
+            # sparse tick labels
+            idx = np.linspace(0, len(x) - 1, 6).astype(int)
+            ax[1].set_xticks(idx)
+            ax[1].set_xticklabels([str(x[i])[:10] for i in idx])
+            ax[1].set_xlabel(xlab)
+
+        fig.suptitle("Regime timeline (anchor samples): argmax π vs argmax α")
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, f"{prefix}_stripes.png"), dpi=dpi)
+        plt.close(fig)
+
+        # -------------------------
+        # (2) entropy comparison
+        # -------------------------
+        H_pi = _entropy_rows(pi, eps=self.eps)
+        H_a  = _entropy_rows(a, eps=self.eps)
+
+        fig, ax = plt.subplots(figsize=(12, 3.0))
+        ax.plot(x, H_pi, label="H(π)")
+        ax.plot(x, H_a,  label="H(α)")
+        ax.set_title("Regime uncertainty over time (entropy)")
+        ax.set_ylabel("entropy")
+        ax.set_xlabel(xlab)
+        ax.legend(loc="upper right")
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, f"{prefix}_entropy.png"), dpi=dpi)
+        plt.close(fig)
+
+        # -------------------------
+        # (3) top-k α probabilities
+        # -------------------------
+        idx_top = np.argsort(-a, axis=1)[:, :topk]        # (T0, topk)
+        val_top = np.take_along_axis(a, idx_top, axis=1)  # (T0, topk)
+
+        fig, ax = plt.subplots(figsize=(12, 3.2))
+        for j in range(topk):
+            ax.plot(x, val_top[:, j], label=f"top{j+1} (reg={idx_top[:, j]})")
+        ax.set_ylim(-0.02, 1.02)
+        ax.set_title(f"Top-{topk} filtered regime probabilities (α)")
+        ax.set_ylabel("probability")
+        ax.set_xlabel(xlab)
+        ax.legend(loc="upper right", fontsize=8)
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, f"{prefix}_alpha_top{topk}.png"), dpi=dpi)
+        plt.close(fig)
+
+        # -------------------------
+        # (4) transition matrix A
+        # -------------------------
+        fig, ax = plt.subplots(figsize=(6.2, 5.2))
+        im = ax.imshow(A, aspect="auto")
+        ax.set_title("Transition matrix A")
+        ax.set_xlabel("to j")
+        ax.set_ylabel("from i")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, f"{prefix}_A.png"), dpi=dpi)
+        plt.close(fig)
+
+        # -------------------------
+        # (5) A given switch
+        # -------------------------
+        A_sw = _normalize_given_switch(A, eps=self.eps)
+        fig, ax = plt.subplots(figsize=(6.2, 5.2))
+        im = ax.imshow(A_sw, aspect="auto")
+        ax.set_title("A given a transition occurs (diag removed)")
+        ax.set_xlabel("to j")
+        ax.set_ylabel("from i")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, f"{prefix}_A_given_switch.png"), dpi=dpi)
+        plt.close(fig)
