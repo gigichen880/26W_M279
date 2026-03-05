@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 import numpy as np
 from numpy.typing import NDArray
 
@@ -38,6 +38,12 @@ class RegimeModel:
     max_iter: int = 300
     tol: float = 1e-3
 
+    # controls GMM initialization (important for macOS threadpoolctl crash)
+    # sklearn GaussianMixture defaults to init_params="kmeans" which triggers KMeans
+    # and can crash in some macOS/Python builds via threadpoolctl.
+    gmm_init_params: str = "kmeans"   # "kmeans" | "random" | "random_from_data"
+    gmm_n_init: int = 1              # increase when using random init for stability
+
     trans_smooth: float = 1.0  # Laplace smoothing for A counts
     eps: float = 1e-12
 
@@ -53,21 +59,47 @@ class RegimeModel:
                 "Install with: pip install scikit-learn"
             ) from e
 
-        gmm = GaussianMixture(
-            n_components=self.n_regimes,
-            covariance_type=self.covariance_type,
-            reg_covar=self.reg_covar,
-            random_state=self.random_state,
-            max_iter=self.max_iter,
-            tol=self.tol,
-        )
-        gmm.fit(Z)
+        Z = np.asarray(Z, dtype=float)
+        if Z.ndim != 2:
+            raise ValueError(f"Z must be 2D array [T0, D], got shape={Z.shape}")
+
+        init_params = str(self.gmm_init_params).lower()
+        if init_params not in {"kmeans", "random", "random_from_data"}:
+            raise ValueError("gmm_init_params must be one of {'kmeans','random','random_from_data'}")
+
+        def _make(init: str) -> "GaussianMixture":
+            return GaussianMixture(
+                n_components=int(self.n_regimes),
+                covariance_type=str(self.covariance_type),
+                reg_covar=float(self.reg_covar),
+                random_state=int(self.random_state),
+                max_iter=int(self.max_iter),
+                tol=float(self.tol),
+                init_params=str(init),
+                n_init=int(self.gmm_n_init),
+            )
+
+        gmm = _make(init_params)
+
+        try:
+            gmm.fit(Z)
+        except AttributeError as e:
+            # Workaround for macOS/Python builds where KMeans->threadpoolctl crashes
+            # during GMM initialization when init_params="kmeans".
+            if init_params == "kmeans":
+                print(f"[warn] GMM init via kmeans failed ({e}); retrying with init_params='random'")
+                gmm = _make("random")
+                gmm.fit(Z)
+            else:
+                raise
+
         self.gmm_ = gmm
         return self
 
     def predict_pi(self, Z: NDArray[np.floating]) -> NDArray[np.floating]:
         if self.gmm_ is None:
             raise RuntimeError("Call fit_gmm() first (or supply PI externally).")
+        Z = np.asarray(Z, dtype=float)
         PI = self.gmm_.predict_proba(Z)
         # ensure numeric stability
         PI = np.maximum(PI, self.eps)
@@ -106,7 +138,6 @@ class RegimeModel:
         if K != self.n_regimes:
             raise ValueError(f"PI has K={K}, but RegimeModel.n_regimes={self.n_regimes}")
         if T < 2:
-            # trivial fallback: identity-ish
             A = np.eye(K, dtype=float)
             self.A_ = A
             return A
@@ -119,8 +150,6 @@ class RegimeModel:
             for t in range(1, T):
                 counts[s[t - 1], s[t]] += 1.0
         else:
-            # expected transition counts: sum_{t=2..T} PI[t-1,i] PI[t,j]
-            # This is a simple “soft-count” estimator.
             for t in range(1, T):
                 counts += np.outer(PI[t - 1], PI[t])
 
@@ -144,6 +173,7 @@ class RegimeModel:
                 raise RuntimeError("Need transition matrix A. Call estimate_transition() first.")
             A = self.A_
 
+        PI = np.asarray(PI, dtype=float)
         T, K = PI.shape
         if K != self.n_regimes:
             raise ValueError(f"PI has K={K}, but RegimeModel.n_regimes={self.n_regimes}")
@@ -159,11 +189,10 @@ class RegimeModel:
         ALPHA[0] = a
 
         for t in range(1, T):
-            pred = a @ A  # [K]
+            pred = a @ A
             post = pred * PI[t]
             s = post.sum()
             if s <= self.eps:
-                # degenerate fallback: use PI[t]
                 a = PI[t].copy()
             else:
                 a = post / s

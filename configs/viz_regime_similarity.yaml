@@ -1,0 +1,47 @@
+# configs/viz_regime_similarity.yaml
+
+inputs:
+  csv: "results/regime_similarity_backtest.csv"
+
+outputs:
+  outdir: "results/figs_regime_similarity"
+  prefix: ""   # optional filename prefix like "v1_" (leave "" for none)
+
+plot:
+  roll_window: 21
+  winroll_window: 63
+
+  # If null, auto-detect from CSV columns like "{method}_{metric}"
+  # Otherwise set explicitly e.g. ["model","mix","roll","pers","shrink"]
+  methods: null
+
+  # Two "reference methods" to measure skill/winrate vs all others.
+  # Set to [] to disable.
+  reference_methods: ["model", "mix"]
+
+  # Control which overlay metrics to attempt (will auto-skip missing ones)
+  overlay_metrics:
+    - fro
+    - kl
+    - stein
+    - logeuc
+    - corr_spearman
+    - corr_offdiag_fro
+    - eig_log_mse
+    - cond_ratio
+    - gmvp_var
+    - gmvp_vol
+    - gmvp_sharpe
+    - turnover_l1
+    - w_hhi
+    - w_max_abs
+    - w_l1
+
+  # "Heavy-tailed positive" metrics -> log yscale if all positive
+  heavy_pos_metrics: ["kl", "stein", "logeuc", "eig_log_mse"]
+
+  # Higher-is-better metrics for skill/win definitions
+  higher_is_better: ["corr_spearman", "gmvp_cumret", "gmvp_mean", "gmvp_sharpe"]
+
+  # Turn calibration plots on/off (requires {method}_pred_var and {method}_real_var)
+  calibration: false

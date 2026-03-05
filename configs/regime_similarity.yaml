@@ -1,0 +1,83 @@
+data:
+  parquet_path: "data/processed/returns_universe_100.parquet"
+  policy: "drop_date"
+  q99_thresh: 0.5
+  max_thresh: 1.0
+  min_non_nan_frac: 0.2
+  start_date: "2018-01-01"
+  end_date: "2021-12-31"
+
+model:
+  lookback: 40
+  horizon: 30
+
+  # regimes + filtering
+  n_regimes: 8
+  tau: 2.0
+  random_state: 0
+  transition_estimator: "soft"     # "hard" or "soft"
+  trans_smooth: 1.0
+  gmm_init_params: "random"
+  gmm_n_init: 5
+
+  # target object
+  ddof: 1
+
+  # stage-1/2/3 training sampling stride (controls how many anchor windows are used for fit())
+  sample_stride: 5
+
+embedder:
+  name: "pca"                      # "pca" or "corr_eig"
+
+  # PCA embedder params
+  pca_k: 10
+
+  # Corr-eig embedder params
+  k_eigs: 32
+
+  # window validation inside embedder (for building training windows)
+  max_window_na_pct: 0.3
+  min_stocks_with_data_pct: 0.8
+  verbose_skip: false
+
+aggregator:
+  name: "logeuc"                   # "logeuc" or "arith"
+  eps_spd: 1.0e-8
+
+backtest:
+  k_neighbors: 10
+  stride: 5                        # evaluation stride in raw_anchor units
+  neighbor_gap: 5                  # disallow near-duplicate neighbors
+
+  long_only: false
+  verbose: true
+
+  # refit control
+  refit_mode: "days"               # "days" or "steps"
+  refit_every_days: 40             # used when refit_mode="days"
+  refit_every_steps: 20            # used when refit_mode="steps"
+
+validation:
+  # validation of FUTURE window (evaluation hold-out)
+  fut_max_na_pct: 0.3
+  fut_min_stocks_pct: 0.8
+
+internals:
+  burn_in: 252
+  min_samples_for_gmm: 50
+
+guardrail:
+  trace_ratio_lo: 0.2
+  trace_ratio_hi: 5.0
+
+mixing:
+  mix_lambda: 0.3                  # S_mix = (1-lam) S_shrink + lam S_model
+  shrink_gamma: 0.3                # baseline_shrink_to_diag gamma
+
+stability:
+  floor_eps: 1.0e-4                # diagonal ridge (return^2)
+  apply_floor_to: "gmvp_only"      # "all" or "gmvp_only"
+
+outputs:
+  outdir: "results"
+  tag: "regime_similarity"
