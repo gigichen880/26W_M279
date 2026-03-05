@@ -34,6 +34,7 @@ def build_model(
     random_state: int = 0,
     transition_estimator: str = "hard",
     trans_smooth: float = 1.0,
+    sample_stride: int = 1,
 ) -> RegimeAwareSimilarityForecaster:
     # embedder = CorrEigenEmbedder(k=k_eigs)
     embedder = PCAWindowEmbedder(
@@ -57,7 +58,8 @@ def build_model(
         regime_model=regime_model,
         tau=tau,
         transition_estimator=transition_estimator, 
-        trans_smooth=trans_smooth,           
+        trans_smooth=trans_smooth,  
+        sample_stride=sample_stride,         
     )
 
 def trace_ratio_guardrail(S_hat, S_ref, lo=0.2, hi=5.0) -> tuple[bool, float]:
@@ -79,6 +81,8 @@ def run_backtest(
     refit_every: int = 20,
     long_only: bool = False,
     verbose: bool = True,
+    stride: int = 5,          # evaluate every stride days
+    neighbor_gap: int = 5,    # disallow neighbors too close in time
 ) -> pd.DataFrame:
 
     if not isinstance(returns_df.index, pd.DatetimeIndex):
@@ -116,6 +120,10 @@ def run_backtest(
     def _wl1(w):  return float(np.sum(np.abs(w)))
 
     for raw_anchor in range(raw_anchor_start, raw_anchor_end + 1):
+        if stride > 1:
+            # apply stride to reduce number of evaluation points
+            if (raw_anchor - raw_anchor_start) % stride != 0:
+                continue
 
         # ----------------------------
         # (0) Refit model occasionally (walk-forward)
@@ -127,6 +135,7 @@ def run_backtest(
                 horizon=horizon,
                 transition_estimator="soft",  # or "hard"
                 trans_smooth=1.0,
+                sample_stride=5, 
             )
 
             if verbose:
@@ -168,6 +177,7 @@ def run_backtest(
                 raw_anchor=raw_anchor,
                 k_neighbors=k_neighbors,
                 use_filter=True,
+                neighbor_gap=neighbor_gap,
             )
         except Exception as e:
             if verbose:
@@ -317,6 +327,8 @@ def main():
         refit_every=5,
         long_only=False,
         verbose=True,
+        stride=5,
+        neighbor_gap=5,
     )
 
     # ----------------------------

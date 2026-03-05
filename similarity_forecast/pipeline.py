@@ -69,6 +69,10 @@ class RegimeAwareSimilarityForecaster:
     anchor_dates_: Optional[pd.DatetimeIndex] = None
     anchor_rows_: Optional[np.ndarray] = None  # shape [T0], raw row index for each sample
 
+    # training sample de-duplication:
+    # use only every sample_stride-th anchor when building (embed,target) samples
+    sample_stride: int = 1
+
     # hard / soft transition in prediction
     transition_estimator: str = "hard"  # {"hard","soft"}
     trans_smooth: float = 1.0           # Laplace smoothing λ
@@ -81,7 +85,10 @@ class RegimeAwareSimilarityForecaster:
         T = R.shape[0]
         L, H = self.lookback, self.horizon
         out: List[Tuple[int, slice, slice]] = []
-        for anchor in range(L - 1, T - H):
+
+        stride = max(int(self.sample_stride), 1)
+
+        for anchor in range(L - 1, T - H, stride): # step by stride
             past = slice(anchor - L + 1, anchor + 1)
             fut = slice(anchor + 1, anchor + H + 1)
             out.append((anchor, past, fut))
@@ -224,6 +231,7 @@ class RegimeAwareSimilarityForecaster:
         k_neighbors: int = 50,
         use_filter: bool = True,
         alpha_fallback: str = "pi",     # {"pi","uniform"}
+         neighbor_gap: int = 5,         # require neighbor anchor <= raw_anchor - (H + gap)
     ) -> NDArray[np.floating]:
         """
         Stage 1: embed current window -> e0
@@ -271,11 +279,15 @@ class RegimeAwareSimilarityForecaster:
 
         idx_all, dist_all = self.knn_.query(e=e0, k=k_search, exclude_index=None)
 
-        # label-availability: neighbor anchor a must satisfy a <= raw_anchor - H
+        # label-availability + anti-dup gap:
+        # neighbor anchor a must satisfy a <= raw_anchor - H - gap
         H = self.horizon
-        is_label_available = self.anchor_rows_[idx_all] <= (raw_anchor - H)
-        idx = idx_all[is_label_available]
-        dist = dist_all[is_label_available]
+        gap = max(int(neighbor_gap), 0)
+        cutoff = raw_anchor - H - gap
+
+        is_eligible = self.anchor_rows_[idx_all] <= cutoff
+        idx = idx_all[is_eligible]
+        dist = dist_all[is_eligible]
 
         if idx.size == 0:
             raise ValueError("No label-available neighbors (try smaller horizon or larger train history).")
