@@ -24,6 +24,22 @@ from scripts.clean_data import clean_returns_matrix_at_load
 import dataclasses
 from numpy.typing import NDArray
 
+def _spd_floor(S: np.ndarray, eps: float) -> np.ndarray:
+    """
+    Add diagonal ridge + SPD projection for inversion stability.
+    eps is in covariance units (return^2).
+    """
+    if eps is None or eps <= 0:
+        return S
+    S2 = (S + S.T) / 2.0
+    S2 = S2 + float(eps) * np.eye(S2.shape[0])
+    return project_to_spd(S2, eps=1e-8)
+
+def _mix_cov(S_model: np.ndarray, S_shrink: np.ndarray, lam: float) -> np.ndarray:
+    lam = float(np.clip(lam, 0.0, 1.0))
+    S = (1.0 - lam) * S_shrink + lam * S_model
+    return project_to_spd((S + S.T) / 2.0, eps=1e-8)
+
 def build_model(
     lookback: int = 60,
     horizon: int = 20,
@@ -83,6 +99,11 @@ def run_backtest(
     verbose: bool = True,
     stride: int = 5,          # evaluate every stride days
     neighbor_gap: int = 5,    # disallow neighbors too close in time
+
+    # shrinkage mixing + eigenvalue floor
+    mix_lambda: float = 0.3,        # λ in (1-λ)S_shrink + λ S_model
+    floor_eps: float = 1e-4,        # diagonal ridge (in return^2 units)
+    apply_floor_to: str = "all",    # "all" or "gmvp_only"
 ) -> pd.DataFrame:
 
     if not isinstance(returns_df.index, pd.DatetimeIndex):
@@ -108,7 +129,7 @@ def run_backtest(
     last_refit_raw_anchor: int | None = None
 
     # GMVP stability tracking per method
-    w_prev = {"model": None, "roll": None, "pers": None, "shrink": None}
+    w_prev = {"model": None, "mix": None, "roll": None, "pers": None, "shrink": None}
 
     def _turnover(w_prev_i, w_now):
         if w_prev_i is None:
@@ -222,37 +243,71 @@ def run_backtest(
         else:
             Sigma_hat_use = Sigma_hat
 
+        # shrinkage mixing (hybrid)
+        # mix uses the post-guardrail model estimate so wild forecasts can't poison the mix
+        S_mix = _mix_cov(S_model=Sigma_hat_use, S_shrink=S_shrink, lam=mix_lambda)
+
         # ----------------------------
         # (6) GMVP strategy backtest (hold-out)
         # ----------------------------
+        # eigenvalue floor (ridge) to stabilize inversion / GMVP
+        if apply_floor_to not in {"all", "gmvp_only"}:
+            raise ValueError("apply_floor_to must be one of {'all','gmvp_only'}")
+
+        S_model_use = _spd_floor(Sigma_hat_use, floor_eps)
+        S_mix_use   = _spd_floor(S_mix,         floor_eps)
+        S_roll_use  = _spd_floor(S_roll,        floor_eps)
+        S_pers_use  = _spd_floor(S_pers,        floor_eps)
+        S_shrk_use  = _spd_floor(S_shrink,      floor_eps)
+
         # compute weights
-        w_model  = gmvp_weights(Sigma_hat_use, long_only=long_only)
-        w_roll_i = gmvp_weights(S_roll,        long_only=long_only)
-        w_pers_i = gmvp_weights(S_pers,        long_only=long_only)
-        w_shrk_i = gmvp_weights(S_shrink,      long_only=long_only)
+        w_model  = gmvp_weights(S_model_use, long_only=long_only)
+        w_mix    = gmvp_weights(S_mix_use,   long_only=long_only)
+        w_roll_i = gmvp_weights(S_roll_use,  long_only=long_only)
+        w_pers_i = gmvp_weights(S_pers_use,  long_only=long_only)
+        w_shrk_i = gmvp_weights(S_shrk_use,  long_only=long_only)
 
         # turnover
         turn_model = _turnover(w_prev["model"],  w_model)
+        turn_mix   = _turnover(w_prev["mix"],    w_mix)
         turn_roll  = _turnover(w_prev["roll"],   w_roll_i)
         turn_pers  = _turnover(w_prev["pers"],   w_pers_i)
         turn_shrk  = _turnover(w_prev["shrink"], w_shrk_i)
 
-        w_prev["model"], w_prev["roll"], w_prev["pers"], w_prev["shrink"] = w_model, w_roll_i, w_pers_i, w_shrk_i
+        w_prev["model"], w_prev["mix"], w_prev["roll"], w_prev["pers"], w_prev["shrink"] = (
+            w_model, w_mix, w_roll_i, w_pers_i, w_shrk_i
+        )
 
         # realized hold-period stats (uses realized fut returns)
         s_model = hold_period_portfolio_stats(fut=fut, w=w_model)
+        s_mix   = hold_period_portfolio_stats(fut=fut, w=w_mix)
         s_roll  = hold_period_portfolio_stats(fut=fut, w=w_roll_i)
         s_pers  = hold_period_portfolio_stats(fut=fut, w=w_pers_i)
         s_shrk  = hold_period_portfolio_stats(fut=fut, w=w_shrk_i)
 
         # ----------------------------
-        # (7) Covariance matrix error metrics (model + baselines)
-        #     IMPORTANT: pass W_eval=None so eval_all_metrics doesn't compute probe metrics.
+        # (7) Covariance matrix error metrics (model + baselines + mix)
         # ----------------------------
-        m_model = eval_all_metrics(Sigma_hat_use, Sigma_true, fut=fut, long_only=long_only, W_eval=None)
-        m_roll  = eval_all_metrics(S_roll,        Sigma_true, fut=fut, long_only=long_only, W_eval=None)
-        m_pers  = eval_all_metrics(S_pers,        Sigma_true, fut=fut, long_only=long_only, W_eval=None)
-        m_shrk  = eval_all_metrics(S_shrink,      Sigma_true, fut=fut, long_only=long_only, W_eval=None)
+        # If apply_floor_to == "all", evaluate matrix metrics on floored covariances too.
+        # If gmvp_only, evaluate metrics on the original (non-floored) covariances.
+        if apply_floor_to == "all":
+            S_model_metric = S_model_use
+            S_mix_metric   = S_mix_use
+            S_roll_metric  = S_roll_use
+            S_pers_metric  = S_pers_use
+            S_shrk_metric  = S_shrk_use
+        else:
+            S_model_metric = Sigma_hat_use
+            S_mix_metric   = S_mix
+            S_roll_metric  = S_roll
+            S_pers_metric  = S_pers
+            S_shrk_metric  = S_shrink
+
+        m_model = eval_all_metrics(S_model_metric, Sigma_true, fut=fut, long_only=long_only, W_eval=None)
+        m_mix   = eval_all_metrics(S_mix_metric,   Sigma_true, fut=fut, long_only=long_only, W_eval=None)
+        m_roll  = eval_all_metrics(S_roll_metric,  Sigma_true, fut=fut, long_only=long_only, W_eval=None)
+        m_pers  = eval_all_metrics(S_pers_metric,  Sigma_true, fut=fut, long_only=long_only, W_eval=None)
+        m_shrk  = eval_all_metrics(S_shrk_metric,  Sigma_true, fut=fut, long_only=long_only, W_eval=None)
 
         # ----------------------------
         # (8) Assemble row
@@ -262,27 +317,34 @@ def run_backtest(
             "raw_anchor": raw_anchor,
             "guardrail_trace_ratio": float(ratio) if np.isfinite(ratio) else np.nan,
             "guardrail_triggered": bool(bad),
+            "mix_lambda": float(mix_lambda),
+            "floor_eps": float(floor_eps),
+            "apply_floor_to": apply_floor_to,
         }
 
         # matrix metrics
         row.update({f"model_{k}": v for k, v in m_model.items()})
+        row.update({f"mix_{k}":   v for k, v in m_mix.items()})
         row.update({f"roll_{k}":  v for k, v in m_roll.items()})
         row.update({f"pers_{k}":  v for k, v in m_pers.items()})
         row.update({f"shrink_{k}": v for k, v in m_shrk.items()})
 
         # GMVP strategy metrics
         for k, v in s_model.items(): row[f"model_{k}"] = v
-        for k, v in s_roll.items():  row[f"roll_{k}"] = v
-        for k, v in s_pers.items():  row[f"pers_{k}"] = v
+        for k, v in s_mix.items():   row[f"mix_{k}"]   = v
+        for k, v in s_roll.items():  row[f"roll_{k}"]  = v
+        for k, v in s_pers.items():  row[f"pers_{k}"]  = v
         for k, v in s_shrk.items():  row[f"shrink_{k}"] = v
 
         row["model_turnover_l1"]  = turn_model
+        row["mix_turnover_l1"]    = turn_mix
         row["roll_turnover_l1"]   = turn_roll
         row["pers_turnover_l1"]   = turn_pers
         row["shrink_turnover_l1"] = turn_shrk
 
         # weight concentration diagnostics
         row["model_w_hhi"] = _hhi(w_model);  row["model_w_max_abs"] = _wmax(w_model);  row["model_w_l1"] = _wl1(w_model)
+        row["mix_w_hhi"]   = _hhi(w_mix);    row["mix_w_max_abs"]   = _wmax(w_mix);    row["mix_w_l1"]   = _wl1(w_mix)
         row["roll_w_hhi"]  = _hhi(w_roll_i); row["roll_w_max_abs"]  = _wmax(w_roll_i); row["roll_w_l1"]  = _wl1(w_roll_i)
         row["pers_w_hhi"]  = _hhi(w_pers_i); row["pers_w_max_abs"]  = _wmax(w_pers_i); row["pers_w_l1"]  = _wl1(w_pers_i)
         row["shrink_w_hhi"]= _hhi(w_shrk_i); row["shrink_w_max_abs"]= _wmax(w_shrk_i); row["shrink_w_l1"]= _wl1(w_shrk_i)
@@ -334,7 +396,7 @@ def main():
     # ----------------------------
     # Report
     # ----------------------------
-    METHODS = ["model", "roll", "pers", "shrink"]
+    METHODS = ["model", "mix", "roll", "pers", "shrink"]
 
     # (1) Covariance matrix error metrics (edit this list to taste)
     COV_METRICS = [
