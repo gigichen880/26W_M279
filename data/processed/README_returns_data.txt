@@ -1,7 +1,11 @@
 RETURNS DATA FOR FORECASTING PIPELINE
 ======================================
 
-Correct file to use: data/processed/returns_universe_100.parquet
+Recommended (cleaned): data/processed/returns_universe_100_cleaned.parquet
+  - Same as below but with 73 days removed where any stock had >50% daily return (splits/data errors).
+  - See data/DATA_QUALITY_ISSUES.md.
+
+Raw: data/processed/returns_universe_100.parquet
 
 Structure:
 - 3,655 dates (rows) x 100 tickers (columns) — pipeline expects index=dates, columns=tickers

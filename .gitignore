@@ -13,6 +13,9 @@ env/
 
 # Data files (too large for git)
 data/raw/
+data/processed/*.parquet
+*.parquet
+*.parquet.zip
 *.csv.zip
 *.7z
 
@@ -24,7 +27,6 @@ archive_eda/
 *.log
 get-pip.py
 .mplconfig/
-matrix_inspection_report.txt
 inspection_figures/
 
 # IDE
@@ -38,6 +40,11 @@ inspection_figures/
 results/eda/figures/*.png
 results/eda/reports/*.csv
 results/eda/reports/*.parquet
+results/
+
+# Allow LaTeX tables for Overleaf
+!results/latex_tables/
+!results/latex_tables/*.tex
 
 # Keep these small files
 !data/universes/*.csv

@@ -354,15 +354,16 @@ def run_backtest(
             continue
 
         # ----------------------------
-        # (2) Predict covariance (model)
+        # (2) Predict covariance (model) and get regime assignments
         # ----------------------------
         try:
-            Sigma_hat = model.predict_at_raw_anchor(
+            Sigma_hat, alpha_t, pi_t = model.predict_at_raw_anchor(
                 past=past,
                 raw_anchor=raw_anchor,
                 k_neighbors=int(k_neighbors),
                 use_filter=True,
                 neighbor_gap=int(neighbor_gap),
+                return_regime=True,
             )
         except Exception as e:
             if verbose:
@@ -370,6 +371,8 @@ def run_backtest(
             continue
 
         Sigma_hat = np.asarray(Sigma_hat, dtype=float)
+        K_regimes = alpha_t.size
+        regime_assigned = int(np.argmax(alpha_t))
 
         # ----------------------------
         # (3) Realized target covariance
@@ -459,7 +462,7 @@ def run_backtest(
         m_shrk  = eval_all_metrics(S_shrk_metric,  Sigma_true, fut=fut, long_only=bool(long_only), W_eval=None)
 
         # ----------------------------
-        # (8) Row
+        # (8) Row (including regime data)
         # ----------------------------
         row = {
             "date": anchor_date,
@@ -470,7 +473,11 @@ def run_backtest(
             "shrink_gamma": float(shrink_gamma),
             "floor_eps": float(floor_eps),
             "apply_floor_to": str(apply_floor_to),
+            "regime_assigned": regime_assigned,
         }
+        for k in range(K_regimes):
+            row[f"regime_prob_{k}"] = float(alpha_t[k])
+            row[f"regime_raw_{k}"] = float(pi_t[k])
 
         row.update({f"model_{k}": v for k, v in m_model.items()})
         row.update({f"mix_{k}":   v for k, v in m_mix.items()})
@@ -642,6 +649,7 @@ def main():
     print(f"  {outdir}/{tag}_backtest.parquet")
     print(f"  {outdir}/{tag}_backtest.csv")
     print(f"  {outdir}/{tag}_config_used.yaml")
+    print("✓ Regime assignments saved to backtest results (columns: regime_assigned, regime_prob_*, regime_raw_*)")
 
     report_df = build_report_table(results)
     report_path = os.path.join(outdir, "regime_similarity_report.csv")

@@ -246,8 +246,9 @@ class RegimeAwareSimilarityForecaster:
         k_neighbors: int = 50,
         use_filter: bool = True,
         alpha_fallback: str = "pi",     # {"pi","uniform"}
-         neighbor_gap: int = 5,         # require neighbor anchor <= raw_anchor - (H + gap)
-    ) -> NDArray[np.floating]:
+        neighbor_gap: int = 5,          # require neighbor anchor <= raw_anchor - (H + gap)
+        return_regime: bool = False,
+    ):
         """
         Stage 1: embed current window -> e0
         Stage 2: regime membership from GMM -> pi0
@@ -255,9 +256,9 @@ class RegimeAwareSimilarityForecaster:
             - if use_filter: alpha := filter_update(alpha_prev, A_, pi0)
             - else:         alpha := pi0
 
-        NOTE:
-        - hard vs soft is controlled ONLY by self.transition_estimator during fit()
-            when estimating A_. Prediction-time filtering always uses stored A_.
+        Returns:
+            If return_regime is False: covariance forecast (NDArray).
+            If return_regime is True: (covariance_forecast, alpha, pi0) with alpha/pi0 shape (K,).
         """
         self._check_fitted()
         assert self.embeds_ is not None and self.targets_ is not None and self.knn_ is not None
@@ -323,7 +324,10 @@ class RegimeAwareSimilarityForecaster:
         YK = np.stack(yk_list, axis=0)  # (K, ...)
 
         yhat = np.tensordot(alpha, YK, axes=(0, 0))
-        return self.target_object.postprocess(yhat)
+        out = self.target_object.postprocess(yhat)
+        if return_regime:
+            return out, alpha, pi0
+        return out
 
     def save_regime_diagnostics(
         self,

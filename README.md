@@ -13,15 +13,30 @@ This project implements similarity-based covariance forecasting for US equities 
 
 ```
 26W_M279/
-├── data/               # Dataset storage (raw, processed, universes)
-├── scripts/            # Data processing scripts
+├── data/               # Dataset storage (raw, processed, universes, docs)
+├── scripts/            # Data processing and analysis scripts
 │   ├── data_extraction/
-│   └── universe_selection/
+│   ├── universe_selection/
+│   ├── data_validation/
+│   └── analysis/
 ├── notebooks/          # Jupyter notebooks for EDA
-├── results/            # Analysis outputs (figures, reports)
+├── results/            # Analysis outputs (figures, reports, latex_tables)
+├── docs/               # General documentation (see FILE_ORGANIZATION_RULES.md)
 ├── archive/            # Old attempts (gitignored)
-└── similarity_forecast/           # Main forecasting pipeline
+└── similarity_forecast/  # Main forecasting pipeline
 ```
+
+## Repository Organization
+
+See [docs/FILE_ORGANIZATION_RULES.md](docs/FILE_ORGANIZATION_RULES.md) for detailed file organization rules.
+
+**Quick reference:**
+- **Data:** `data/raw/`, `data/processed/`, `data/universes/`, `data/docs/`
+- **Scripts:** `scripts/data_extraction/`, `scripts/universe_selection/`, `scripts/data_validation/`, `scripts/analysis/`
+- **Results:** `results/eda/figures/`, `results/eda/reports/`, `results/latex_tables/`
+- **Documentation:** `data/docs/`, `docs/`
+
+**Do not commit:** Large data (e.g. `.parquet` in data/raw and data/processed), `archive/`, generated figures under `results/eda/figures/`.
 
 ## Data
 
@@ -386,14 +401,17 @@ These isolate correlation forecasting skill separately from volatility scale.
 ### Running Evaluation & Plots
 
 ```bash
-# Run backtest (writes results/*.csv and results/*.parquet)
-python run_backtest_regime_similarity.py
+# Run backtest (writes results/*.csv, results/*.parquet, results/regime_similarity_report.csv)
+python run_backtest.py --config configs/regime_similarity.yaml
 
-# Visualize results
-python scripts/plot_backtest.py \
-  --csv results/regime_similarity_backtest.csv \
-  --outdir results/figs_regime_similarity
+# Optional: override parameters
+python run_backtest.py --config configs/regime_similarity.yaml --set backtest.stride=5 --set model.n_regimes=4
+
+# Visualize results (requires backtest CSV)
+python scripts/analysis/viz_backtest_results.py --config configs/viz_regime_similarity.yaml
 ```
+
+Figures are written to `results/figs_regime_similarity/`. See [docs/RESULTS_FINAL_REPORT.md](docs/RESULTS_FINAL_REPORT.md) for result summaries and figure captions.
 
 ## Next Steps
 
