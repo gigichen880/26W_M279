@@ -9,7 +9,7 @@ data:
 model:
   lookback: 50
   horizon: 20
-  n_regimes: 4
+  n_regimes: 6
   tau: 2.0
   random_state: 0
   transition_estimator: soft
