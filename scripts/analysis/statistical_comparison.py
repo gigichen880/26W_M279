@@ -6,6 +6,7 @@ Backtest data is in wide format: one row per date, columns like model_fro, roll_
 """
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -158,6 +159,102 @@ def print_comparison_table(results_df):
     print()
 
 
+# Metrics where lower is better (error/loss); flip sign so positive = Model better
+_LOWER_IS_BETTER = {"fro", "logeuc", "kl", "stein", "nll", "gmvp_var", "gmvp_vol", "turnover_l1"}
+
+
+def normalize_difference(metric_name: str, raw_diff: float) -> float:
+    """
+    Normalize difference so positive always means Model is better.
+    For lower-is-better metrics: flip sign. For higher-is-better: keep sign.
+    """
+    if metric_name in _LOWER_IS_BETTER:
+        return -raw_diff
+    return raw_diff
+
+
+METRIC_LABELS_PLOT = {
+    "fro": "Frobenius Error\n(Model advantage = lower error)",
+    "logeuc": "Log-Euclidean Distance\n(Model advantage = lower distance)",
+    "gmvp_sharpe": "GMVP Sharpe Ratio\n(Model advantage = higher Sharpe)",
+    "gmvp_var": "GMVP Variance\n(Model advantage = lower variance)",
+    "turnover_l1": "Turnover (L1)\n(Model advantage = lower turnover)",
+}
+
+KEY_METRICS_PLOT = ["fro", "logeuc", "gmvp_sharpe", "gmvp_var", "turnover_l1"]
+
+
+def plot_statistical_comparison(results_df: pd.DataFrame, out_path: Path) -> None:
+    """
+    Bar chart of Model vs baselines with normalized differences.
+    Positive bars ALWAYS mean Model is better. Green = Model better, Red = Model worse.
+    """
+    if results_df.empty:
+        return
+    # Ensure booleans (CSV may have read them as strings)
+    for c in ("significant_5pct", "significant_1pct"):
+        if c in results_df.columns:
+            results_df[c] = results_df[c].replace({"True": True, "False": False}).fillna(False).astype(bool)
+
+    results_df = results_df.copy()
+    results_df["normalized_diff"] = results_df.apply(
+        lambda row: normalize_difference(row["metric"], row["mean_diff"]), axis=1
+    )
+    df_plot = results_df[results_df["metric"].isin(KEY_METRICS_PLOT)].copy()
+
+    if df_plot.empty:
+        return
+
+    fig, axes = plt.subplots(len(KEY_METRICS_PLOT), 1, figsize=(10, 12))
+    if len(KEY_METRICS_PLOT) == 1:
+        axes = [axes]
+    baselines = ["roll", "pers", "shrink", "mix"]
+
+    for idx, metric in enumerate(KEY_METRICS_PLOT):
+        ax = axes[idx]
+        metric_df = df_plot[df_plot["metric"] == metric].copy()
+        metric_df = metric_df.set_index("baseline").reindex(baselines).reset_index()
+        metric_df = metric_df.dropna(subset=["normalized_diff"])
+        if metric_df.empty:
+            ax.set_title(METRIC_LABELS_PLOT.get(metric, metric), fontsize=11, fontweight="bold")
+            ax.axvline(x=0, color="black", linewidth=1)
+            continue
+
+        y_labels = metric_df["baseline"].str.capitalize().tolist()
+        normalized = metric_df["normalized_diff"].values
+        colors = ["#2e7d32" if x > 0 else "#c62828" for x in normalized]
+        bars = ax.barh(y_labels, normalized, color=colors, alpha=0.7, edgecolor="black")
+
+        for bar, (_, row) in zip(bars, metric_df.iterrows()):
+            marker = "***" if row.get("significant_1pct") else ("**" if row.get("significant_5pct") else "")
+            if marker:
+                x_pos = bar.get_width()
+                y_pos = bar.get_y() + bar.get_height() / 2
+                ax.text(
+                    x_pos, y_pos, f" {marker}",
+                    va="center", ha="left" if x_pos > 0 else "right",
+                    fontsize=10, fontweight="bold",
+                )
+
+        ax.axvline(x=0, color="black", linewidth=1)
+        ax.set_xlabel("Model Advantage (positive = Model better)", fontsize=10)
+        ax.set_title(METRIC_LABELS_PLOT.get(metric, metric), fontsize=11, fontweight="bold")
+        ax.grid(axis="x", alpha=0.3)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        if metric in ("fro", "gmvp_var"):
+            ax.ticklabel_format(style="scientific", axis="x", scilimits=(0, 0))
+
+    fig.suptitle(
+        "Statistical Comparison: Model vs Baselines (Paired t-tests)\nGreen = Model Better, Red = Model Worse",
+        fontsize=13, fontweight="bold", y=0.995,
+    )
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
 def main():
     """Run statistical comparison."""
     print("\n" + "=" * 100)
@@ -174,10 +271,14 @@ def main():
     results_df = compare_all_baselines(df)
     print_comparison_table(results_df)
 
-    out_path = RESULTS_DIR / "statistical_comparison.csv"
+    csv_path = RESULTS_DIR / "statistical_comparison.csv"
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    results_df.to_csv(out_path, index=False)
-    print(f"Saved results to {out_path}\n")
+    results_df.to_csv(csv_path, index=False)
+    print(f"Saved results to {csv_path}")
+
+    fig_path = RESULTS_DIR / "figs_regime_similarity" / "statistical_comparison.png"
+    plot_statistical_comparison(results_df, fig_path)
+    print(f"Saved figure to {fig_path}\n")
 
     n_total = len(results_df)
     if n_total > 0:
@@ -193,4 +294,18 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Statistical comparison: Model vs baselines (paired t-tests)")
+    parser.add_argument("--plot-only", type=str, default=None, metavar="CSV",
+                        help="Only generate figure from existing results/statistical_comparison.csv")
+    args = parser.parse_args()
+    if args.plot_only:
+        csv_path = Path(args.plot_only)
+        if not csv_path.exists():
+            csv_path = RESULTS_DIR / "statistical_comparison.csv"
+        df = pd.read_csv(csv_path)
+        fig_path = RESULTS_DIR / "figs_regime_similarity" / "statistical_comparison.png"
+        plot_statistical_comparison(df, fig_path)
+        print(f"Saved figure to {fig_path}")
+    else:
+        main()
