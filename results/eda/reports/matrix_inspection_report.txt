@@ -1,0 +1,117 @@
+pvCLCL MATRIX INSPECTION REPORT
+============================================================
+
+Input files:
+  CSV:     /Users/devanshmishra/Desktop/Top of the food chain/Devansh/UCLA/projects/26W_M279/pvCLCL_matrix.csv.zip
+  Parquet: /Users/devanshmishra/Desktop/Top of the food chain/Devansh/UCLA/projects/26W_M279/pvCLCL_matrix.parquet.zip
+
+CSV vs Parquet comparison:
+  Shape, index, columns, and values match.
+
+============================================================
+1. MATRIX OVERVIEW
+============================================================
+  Dimensions:        6,089 rows (tickers) x 5,531 columns (dates)
+  Total cells:      33,678,259
+  Date range:       2000-01-03 00:00:00  to  2021-12-31 00:00:00
+  Unique tickers:   6,089
+  Sample tickers (first 50):
+    AA, AAA, AAC, AAG, AAI, AAIC, AAIR, AAL, AAM, AAN
+    AAP, AAS, AAT, AAV, AAXN, AB, ABB, ABBV, ABC, ABD
+    ABE, ABER, ABERF, ABEV, ABF, ABG, ABH, ABI, ABK, ABM
+    ABMD, ABN, ABP, ABR, ABRI, ABS, ABT, ABV, ABVT, ABX
+    ABY, AC, ACA, ACB, ACC, ACCO, ACE, ACEE, ACEL, ACF
+
+============================================================
+2. pvCLCL VALUE STATISTICS
+============================================================
+  Count (non-missing): 16,411,141
+  Min:    -0.962963
+  Max:    12.3652
+  Mean:   0.000556775
+  Median: 0
+  Std:    0.0311918
+  P 1:    -0.081301
+  P 5:    -0.038364
+  P25:    -0.009396
+  P50:    0
+  P75:    0.009901
+  P95:    0.039208
+  P99:    0.087912
+
+============================================================
+3. MISSING DATA
+============================================================
+  Total missing cells: 17,267,118 / 33,678,259  (51.27%)
+  Missing % by year:
+    2000: 48.39%  (742,567 / 1,534,428)
+    2001: 51.09%  (768,412 / 1,503,983)
+    2002: 51.96%  (797,244 / 1,534,428)
+    2003: 52.28%  (802,166 / 1,534,428)
+    2004: 51.33%  (784,479 / 1,528,339)
+    2005: 50.13%  (769,248 / 1,534,428)
+    2006: 49.71%  (759,769 / 1,528,339)
+    2007: 49.18%  (748,686 / 1,522,250)
+    2008: 50.10%  (771,859 / 1,540,517)
+    2009: 51.97%  (797,450 / 1,534,428)
+    2010: 51.95%  (797,142 / 1,534,428)
+    2011: 51.67%  (792,772 / 1,534,428)
+    2012: 51.32%  (778,142 / 1,516,161)
+    2013: 50.88%  (780,703 / 1,534,428)
+    2014: 49.76%  (763,513 / 1,534,428)
+    2015: 49.60%  (761,074 / 1,534,428)
+    2016: 50.89%  (780,927 / 1,534,428)
+    2017: 51.88%  (792,850 / 1,528,339)
+    2018: 52.27%  (795,726 / 1,522,250)
+    2019: 52.97%  (812,745 / 1,534,428)
+    2020: 53.95%  (831,117 / 1,540,517)
+    2021: 54.65%  (838,527 / 1,534,428)
+
+============================================================
+4. SAMPLE 10×10 SUBMATRIX (random tickers × random dates)
+============================================================
+  Tickers: BCSF, BED, BGC, CRK, IAI, IDHQ, NUV, PEB, ROV, TALO
+  Dates:   2004-01-09, 2008-03-03, 2008-11-10, 2009-11-25, 2010-12-31, 2012-01-03, 2014-03-05, 2017-03-10, 2018-02-07, 2020-05-19
+
+        2004-01-09  2008-03-03  2008-11-10  2009-11-25  2010-12-31  2012-01-03  2014-03-05  2017-03-10  2018-02-07  2020-05-19
+ticker                                                                                                                        
+BCSF           NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN    0.008163
+BED      -0.001057         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN
+BGC      -0.043779    0.019281   -0.023349   -0.003543   -0.012106    0.049180   -0.006673    0.030769   -0.001698         NaN
+CRK      -0.004057    0.010193    0.008791    0.065962   -0.017993    0.067974   -0.031664   -0.018100   -0.079196   -0.006048
+IAI            NaN   -0.005024   -0.063810   -0.006078   -0.003092    0.027725    0.004081    0.001136   -0.000930   -0.030809
+IDHQ           NaN         NaN         NaN         NaN         NaN         NaN   -0.002001    0.007909    0.014341   -0.009723
+NUV       0.003202    0.016920   -0.028666    0.006147    0.008782    0.002041    0.000000    0.004206    0.006289    0.006316
+PEB            NaN         NaN         NaN         NaN   -0.004410    0.016684   -0.015121    0.015152    0.000000    0.000864
+ROV       0.098068         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN
+TALO           NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN   -0.031046
+
+============================================================
+5. DATA CHARACTERISTICS (pvCLCL interpretation)
+============================================================
+  Observations:
+    Value range: [-0.963, 12.37]
+    Mean |value|: 0.01693
+    Fraction in [-1, 1]:     100.00%
+    Fraction in [-0.2, 0.2]: 99.79%
+    Fraction in [-0.1, 0.1]: 98.68%
+    All values positive:     False
+    Fraction in [-100, 100]: 100.00%
+
+  --> Likely LOG RETURNS (most values in [-0.2, 0.2]).
+  --> Consistent with SIMPLE RETURNS (values in [-1, 1] or decimal form).
+  --> Could be PERCENTAGE RETURNS (e.g. -5.2 for -5.2%).
+
+============================================================
+6. DATA SOURCE (inferred from ticker format)
+============================================================
+  Ticker format checks (on first 200 rows):
+    Contains spaces:     False
+    Contains 'US Equity': False
+    Numeric-only IDs:    False
+    Mostly short (≤5 ch): 100%
+    'XX Equity' suffix:  False
+
+  --> Likely YAHOO / CRSP symbol (short alphabetic tickers, e.g. AAPL, MSFT).
+  Note: Survivorship bias cannot be inferred from ticker names alone;
+        delisted tickers often keep the same symbol format.

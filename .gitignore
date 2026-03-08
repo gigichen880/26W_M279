@@ -36,12 +36,12 @@ inspection_figures/
 *.swo
 .DS_Store
 
-# Results (can commit small ones, ignore large)
+# Results: ignore large parquets only; result CSVs and figs_regime_similarity/*.png are committable
+results/*.parquet
+results/ablation_k/*.parquet
 results/eda/figures/*.png
 results/eda/reports/*.csv
 results/eda/reports/*.parquet
-results/
-
 # Allow LaTeX tables for Overleaf
 !results/latex_tables/
 !results/latex_tables/*.tex

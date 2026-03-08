@@ -1,0 +1,57 @@
+data:
+  parquet_path: data/processed/returns_universe_100.parquet
+  policy: drop_date
+  q99_thresh: 0.5
+  max_thresh: 1.0
+  min_non_nan_frac: 0.2
+  start_date: '2012-01-01'
+  end_date: '2021-12-31'
+model:
+  lookback: 50
+  horizon: 20
+  n_regimes: 6
+  tau: 2.0
+  random_state: 0
+  transition_estimator: soft
+  trans_smooth: 10.0
+  gmm_init_params: random
+  gmm_n_init: 10
+  ddof: 1
+  sample_stride: 3
+embedder:
+  name: pca
+  pca_k: 24
+  k_eigs: 32
+  max_window_na_pct: 0.3
+  min_stocks_with_data_pct: 0.8
+  verbose_skip: false
+aggregator:
+  name: logeuc
+  eps_spd: 1.0e-08
+backtest:
+  k_neighbors: 10
+  stride: 5
+  neighbor_gap: 10
+  long_only: false
+  verbose: true
+  refit_mode: days
+  refit_every_days: 20
+  refit_every_steps: 20
+validation:
+  fut_max_na_pct: 0.3
+  fut_min_stocks_pct: 0.8
+internals:
+  burn_in: 252
+  min_samples_for_gmm: 50
+guardrail:
+  trace_ratio_lo: 0.4
+  trace_ratio_hi: 2.5
+mixing:
+  mix_lambda: 0.3
+  shrink_gamma: 0.3
+stability:
+  floor_eps: 0.0005
+  apply_floor_to: gmvp_only
+outputs:
+  outdir: results
+  tag: regime_similarity

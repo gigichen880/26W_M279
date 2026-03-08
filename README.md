@@ -398,20 +398,168 @@ These isolate correlation forecasting skill separately from volatility scale.
 
 ---
 
-### Running Evaluation & Plots
+## Running Evaluation & Analysis
 
+### 1. Main Backtest (Walk-Forward Evaluation)
+
+Run the complete evaluation pipeline with all baselines:
 ```bash
-# Run backtest (writes results/*.csv, results/*.parquet, results/regime_similarity_report.csv)
 python run_backtest.py --config configs/regime_similarity.yaml
+```
 
-# Optional: override parameters
-python run_backtest.py --config configs/regime_similarity.yaml --set backtest.stride=5 --set model.n_regimes=4
+**Outputs:**
+- `results/regime_similarity_backtest.parquet` - Full results (all methods, all dates)
+- `results/regime_similarity_backtest.csv` - Same in CSV format
+- `results/regime_similarity_report.csv` - Summary statistics by method
+- `results/regime_similarity_config_used.yaml` - Config snapshot
 
-# Visualize results (requires backtest CSV)
+**Duration:** ~5-10 minutes
+
+---
+
+### 2. Regime Analysis & Visualization
+
+#### Generate All Regime Figures
+```bash
+# Regime timeline, probability evolution, filtering effect
+python scripts/analysis/visualize_regimes.py
+
+# Regime characterization table
+python scripts/analysis/regime_characterization.py
+
+# Transition matrix heatmap
+python scripts/analysis/visualize_transition_matrix.py
+
+# Performance by regime
+python scripts/analysis/performance_by_regime.py
+```
+
+**Outputs:**
+- `results/figs_regime_similarity/regime_timeline.png`
+- `results/figs_regime_similarity/regime_probs_stacked.png`
+- `results/figs_regime_similarity/regime_filtering_effect.png`
+- `results/figs_regime_similarity/transition_matrix_heatmap.png`
+- `results/figs_regime_similarity/performance_by_regime.png`
+- `results/regime_characterization.csv`
+- `results/transition_matrix.csv`
+
+---
+
+### 3. K Ablation Study
+
+Test model with different numbers of regimes (K=1,2,3,4,5,6):
+```bash
+# Run ablation (6 backtests, takes ~30-60 min)
+python scripts/analysis/run_k_ablation.py
+
+# Analyze results
+python scripts/analysis/analyze_k_ablation.py
+```
+
+**Outputs:**
+- `results/ablation_k/backtest_k{1-6}.parquet` - Results for each K
+- `results/ablation_k_comparison.csv` - Comparison table
+- `results/figs_regime_similarity/ablation_k_regimes.png` - 4-panel figure
+- `results/figs_regime_similarity/ablation_crisis_vs_normal.png` - Crisis vs normal comparison
+
+---
+
+### 4. Statistical Comparison
+
+Compare model vs all baselines with paired t-tests:
+```bash
+python scripts/analysis/statistical_comparison.py
+```
+
+**Outputs:**
+- `results/statistical_comparison.csv` - t-test results for all method pairs
+- Console output with significance markers (**, ***)
+
+---
+
+### 5. Standard Evaluation Plots
+
+Generate time-series plots of all metrics:
+```bash
 python scripts/analysis/viz_backtest_results.py --config configs/viz_regime_similarity.yaml
 ```
 
-Figures are written to `results/figs_regime_similarity/`. See [docs/RESULTS_FINAL_REPORT.md](docs/RESULTS_FINAL_REPORT.md) for result summaries and figure captions.
+**Outputs:**
+- `results/figs_regime_similarity/equity_curves_gmvp.png`
+- `results/figs_regime_similarity/method_overlays.png`
+- `results/figs_regime_similarity/rolling_median_21d.png`
+- `results/figs_regime_similarity/rolling_winrate_ref_*.png`
+- `results/figs_regime_similarity/skill_timeseries_*.png`
+
+---
+
+### 6. Quick Demo (Single Prediction)
+
+Test pipeline on a single anchor point:
+```bash
+python run_regime_similarity.py
+```
+
+**Note:** This is for testing only - uses different data file and parameters
+than main evaluation.
+
+---
+
+## Complete Analysis Pipeline (Run All)
+
+To regenerate all results and figures from scratch:
+```bash
+# Main backtest
+python run_backtest.py --config configs/regime_similarity.yaml
+
+# Regime analysis
+python scripts/analysis/visualize_regimes.py
+python scripts/analysis/regime_characterization.py
+python scripts/analysis/visualize_transition_matrix.py
+
+# K ablation
+python scripts/analysis/run_k_ablation.py
+python scripts/analysis/analyze_k_ablation.py
+
+# Statistical tests
+python scripts/analysis/statistical_comparison.py
+
+# Standard plots
+python scripts/analysis/viz_backtest_results.py --config configs/viz_regime_similarity.yaml
+```
+
+**Total duration:** ~1-2 hours (most time is K ablation)
+
+---
+
+## Key Result Files
+
+After running complete pipeline:
+
+**Metrics & Tables:**
+- `results/regime_similarity_report.csv` - Summary by method
+- `results/regime_characterization.csv` - Regime statistics
+- `results/ablation_k_comparison.csv` - K ablation results
+- `results/statistical_comparison.csv` - Significance tests
+- `results/transition_matrix.csv` - Transition probabilities
+
+**Figures (10 main figures):**
+1. `regime_timeline.png` - Regime assignments with crisis periods
+2. `performance_by_regime.png` - Model vs Roll by regime
+3. `ablation_k_regimes.png` - K=1-6 comparison
+4. `ablation_crisis_vs_normal.png` - Crisis vs normal performance
+5. `equity_curves_gmvp.png` - Cumulative wealth
+6. `regime_probs_stacked.png` - Regime probability evolution
+7. `regime_filtering_effect.png` - Markov filtering demonstration
+8. `transition_matrix_heatmap.png` - Regime transition probabilities
+9. `rolling_median_21d.png` - Temporal performance
+10. `method_overlays.png` - Metric time series
+
+**Raw Results:**
+- `results/regime_similarity_backtest.parquet` - Full backtest data
+- `results/ablation_k/backtest_k{1-6}.parquet` - Ablation data
+
+See [docs/RESULTS_FINAL_REPORT.md](docs/RESULTS_FINAL_REPORT.md) for result summaries and figure captions.
 
 ## Next Steps
 
