@@ -7,6 +7,9 @@ Generates:
 
 Backtest data is in wide format: one row per date,
 columns like model_fro, roll_fro, mix_fro, etc.
+
+Usage:
+python scripts/analysis/statistical_comparison.py
 """
 
 from pathlib import Path
@@ -329,7 +332,7 @@ def main():
         baselines=("roll", "pers", "shrink"),
     )
 
-    fig_path_model = RESULTS_DIR / "figs_regime_similarity" / "model_vs_baselines.png"
+    fig_path_model = RESULTS_DIR / "figs_regime_similarity" / "statistical_comparison" / "model_vs_baselines.png"
 
     plot_statistical_comparison(model_results, fig_path_model)
 
@@ -345,7 +348,7 @@ def main():
         baselines=("roll", "pers", "shrink"),
     )
 
-    fig_path_mix = RESULTS_DIR / "figs_regime_similarity" / "mix_vs_baselines.png"
+    fig_path_mix = RESULTS_DIR / "figs_regime_similarity" / "statistical_comparison" / "mix_vs_baselines.png"
 
     plot_statistical_comparison(mix_results, fig_path_mix)
 

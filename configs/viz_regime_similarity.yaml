@@ -4,16 +4,14 @@ inputs:
   csv: "results/regime_similarity_backtest.csv"
 
 outputs:
-  outdir: "results/figs_regime_similarity"
+  outdir: "results/figs_regime_similarity/raw_temporal"
   prefix: ""   # optional filename prefix like "v1_" (leave "" for none)
 
 plot:
   roll_window: 21
   winroll_window: 63
 
-  # If null, auto-detect from CSV columns like "{method}_{metric}"
-  # Otherwise set explicitly e.g. ["model","mix","roll","pers","shrink"]
-  methods: null
+  methods: ["model","mix","roll","pers","shrink"]
 
   # Two "reference methods" to measure skill/winrate vs all others.
   # Set to [] to disable.
