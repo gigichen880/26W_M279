@@ -32,8 +32,8 @@ class RegimeModel:
       - Otherwise, you can pass in precomputed PI externally.
     """
     n_regimes: int
-    covariance_type: str = "full"
-    reg_covar: float = 1e-6
+    covariance_type: str = "diag"
+    reg_covar: float = 1e-3
     random_state: int = 0
     max_iter: int = 300
     tol: float = 1e-3

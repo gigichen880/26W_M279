@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 # Default paths (repo root = parent of scripts/)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BACKTEST = REPO_ROOT / "results" / "regime_similarity_backtest.parquet"
-DEFAULT_OUTDIR = REPO_ROOT / "results" / "figs_regime_similarity"
+DEFAULT_OUTDIR = REPO_ROOT / "results" / "figs_regime_similarity" / "regime"
 
 
 def load_regime_data(backtest_file: str | Path = DEFAULT_BACKTEST) -> pd.DataFrame:
@@ -396,6 +396,20 @@ def main() -> None:
     df = load_regime_data(args.backtest)
     K = args.K
 
+    # DEBUG HERE
+    prob_cols = [f"regime_prob_{k}" for k in range(K)]
+    raw_cols = [f"regime_raw_{k}" for k in range(K)]
+
+    print("\nFiltered regime probability summary:")
+    print(df[prob_cols].describe())
+
+    if all(col in df.columns for col in raw_cols):
+        print("\nRaw GMM probability summary:")
+        print(df[raw_cols].describe())
+
+    print(f"✓ Loaded {len(df)} evaluation dates")
+    print(f"  Date range: {df['date'].min()} to {df['date'].max()}")
+
     print(f"✓ Loaded {len(df)} evaluation dates")
     print(f"  Date range: {df['date'].min()} to {df['date'].max()}")
     if "regime_assigned" in df.columns:
@@ -436,7 +450,7 @@ def main() -> None:
     print(f"  - {outdir / 'regime_probs_stacked.png'}")
     print(f"  - {outdir / 'regime_filtering_effect.png'}")
     print("  - results/regime_characterization.csv")
-    print("  - results/regime_names_mapping.json")
+    print("  - results/r egime_names_mapping.json")
     print()
 
     print("REGIME ANALYSIS PIPELINE EXECUTED")

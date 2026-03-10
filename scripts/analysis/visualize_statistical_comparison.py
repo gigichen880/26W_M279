@@ -9,7 +9,7 @@ Backtest data is in wide format: one row per date,
 columns like model_fro, roll_fro, mix_fro, etc.
 
 Usage:
-python scripts/analysis/statistical_comparison.py
+python scripts/analysis/visualize_statistical_comparison.py
 """
 
 from pathlib import Path
@@ -291,7 +291,7 @@ def plot_statistical_comparison(results_df: pd.DataFrame, out_path: Path):
 
     fig.suptitle(
         f"Statistical Comparison: {reference.capitalize()} vs Baselines\n"
-        "Green = Reference Better, Red = Reference Worse",
+        "Green = Better than Reference, Red = Worse than Reference",
         fontsize=13,
         fontweight="bold",
         y=0.995,

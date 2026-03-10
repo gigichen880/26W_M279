@@ -4,7 +4,7 @@ data:
   q99_thresh: 0.5
   max_thresh: 1.0
   min_non_nan_frac: 0.2
-  start_date: "2012-01-01"
+  start_date: "2007-07-01"
   end_date: "2021-12-31"
 
 model:
@@ -80,4 +80,4 @@ stability:
 
 outputs:
   outdir: "results"
-  tag: "regime_similarity"
+  tag: "regime_similarit

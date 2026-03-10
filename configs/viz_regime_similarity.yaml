@@ -11,7 +11,7 @@ plot:
   roll_window: 21
   winroll_window: 63
 
-  methods: ["model","mix","roll","pers","shrink"]
+  methods: ["model","mix","roll","shrink"]
 
   # Two "reference methods" to measure skill/winrate vs all others.
   # Set to [] to disable.

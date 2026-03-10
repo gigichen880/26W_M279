@@ -12,7 +12,7 @@ Produces:
 5. equity curves
 
 Usage:
-python -m scripts.analysis.viz_backtest_results \
+python -m scripts.analysis.visualize_backtest_results \
   --config configs/viz_regime_similarity.yaml
 """
 
