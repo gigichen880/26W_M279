@@ -248,6 +248,7 @@ class RegimeAwareSimilarityForecaster:
         alpha_fallback: str = "pi",     # {"pi","uniform"}
         neighbor_gap: int = 5,          # require neighbor anchor <= raw_anchor - (H + gap)
         return_regime: bool = False,
+        return_neighbors: bool = False,
     ):
         """
         Stage 1: embed current window -> e0
@@ -257,8 +258,13 @@ class RegimeAwareSimilarityForecaster:
             - else:         alpha := pi0
 
         Returns:
-            If return_regime is False: covariance forecast (NDArray).
-            If return_regime is True: (covariance_forecast, alpha, pi0) with alpha/pi0 shape (K,).
+            If return_regime is False and return_neighbors is False:
+                covariance forecast (NDArray).
+            If return_regime is True and return_neighbors is False:
+                (covariance_forecast, alpha, pi0) with alpha/pi0 shape (K,).
+            If return_regime is True and return_neighbors is True:
+                (covariance_forecast, alpha, pi0, neighbors_info) where neighbors_info is a dict
+                containing neighbor indices/dates, distances, kernel weights, and regime weights.
         """
         self._check_fitted()
         assert self.embeds_ is not None and self.targets_ is not None and self.knn_ is not None
@@ -318,6 +324,23 @@ class RegimeAwareSimilarityForecaster:
         PI_nbr = self.PI_[idx]  # (M, K)
         W = RegimeAwareWeights(eps=self.eps).compute(kappa=kappa, PI_neighbors=PI_nbr)  # (K, M)
 
+        neighbors_info = None
+        if return_neighbors:
+            neighbor_raw_anchors = self.anchor_rows_[idx]
+            if self.anchor_dates_ is not None:
+                neighbor_dates = self.anchor_dates_[idx]
+            else:
+                neighbor_dates = None
+            neighbors_info = {
+                "indices": idx,
+                "raw_anchors": neighbor_raw_anchors,
+                "dates": neighbor_dates,
+                "dist": dist,
+                "kappa": kappa,
+                "PI_neighbors": PI_nbr,
+                "W": W,
+            }
+
         yk_list = []
         for kk in range(W.shape[0]):
             yk_list.append(self.aggregator.aggregate(self.targets_[idx], W[kk]))
@@ -325,8 +348,12 @@ class RegimeAwareSimilarityForecaster:
 
         yhat = np.tensordot(alpha, YK, axes=(0, 0))
         out = self.target_object.postprocess(yhat)
+        if return_regime and return_neighbors:
+            return out, alpha, pi0, neighbors_info
         if return_regime:
             return out, alpha, pi0
+        if return_neighbors:
+            return out, neighbors_info
         return out
 
     def save_regime_diagnostics(
