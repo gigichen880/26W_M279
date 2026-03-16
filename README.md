@@ -555,6 +555,37 @@ After running complete pipeline:
 9. `rolling_median_21d.png` - Temporal performance
 10. `method_overlays.png` - Metric time series
 
+### Neighbor-Based Case Studies
+
+To understand which historical episodes the model reuses for a given evaluation date, use the
+neighbor case-study tool:
+
+```bash
+# Example: COVID crash case study (anchor 2020-03-09)
+python -m scripts.analysis.case_study_neighbors \
+  --config configs/regime_similarity.yaml \
+  --date 2020-03-09 \
+  --k_neighbors 10
+```
+
+This assumes the main backtest has already been run so that
+`results/regime_similarity_backtest.{parquet,csv}` exists.
+
+**Per-date outputs:**
+- `results/case_studies/neighbors_YYYYMMDD.csv`  
+  Neighbor diagnostics: `neighbor_date`, `lag_days`, `dist_embedding`, kernel weight `kappa`,
+  per-regime neighbor probabilities `pi_neighbor_regime_k`, regime-aware weights `W_regime_k`,
+  and `total_weight` (overall contribution under the filtered regime mix).
+- `results/case_studies/neighbors_YYYYMMDD_weights_vs_date.png`  
+  Panel A — total neighbor weight vs `neighbor_date` (color = embedding distance).
+- `results/case_studies/neighbors_YYYYMMDD_on_regime_timeline.png`  
+  Panel B — neighbors overlaid on a mini regime timeline, with point size ∝ weight and the
+  anchor date shown as a dashed vertical line.
+
+Typical anchors:
+- GFC stress: `2008-11-21`
+- COVID crash: `2020-03-09`
+
 **Raw Results:**
 - `results/regime_similarity_backtest.parquet` - Full backtest data
 - `results/ablation_k/backtest_k{1-6}.parquet` - Ablation data

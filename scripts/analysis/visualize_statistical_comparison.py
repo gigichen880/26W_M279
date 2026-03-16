@@ -291,7 +291,7 @@ def plot_statistical_comparison(results_df: pd.DataFrame, out_path: Path):
 
     fig.suptitle(
         f"Statistical Comparison: {reference.capitalize()} vs Baselines\n"
-        "Green = Better than Reference, Red = Worse than Reference",
+        "Green = Better than Baselines, Red = Worse than Baselines",
         fontsize=13,
         fontweight="bold",
         y=0.995,

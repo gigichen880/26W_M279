@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RESULTS_DIR = REPO_ROOT / "results"
+RESULTS_DIR = REPO_ROOT / "results" 
 
 
 def get_crisis_periods() -> list[tuple[pd.Timestamp, pd.Timestamp]]:
