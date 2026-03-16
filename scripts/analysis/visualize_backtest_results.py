@@ -156,6 +156,12 @@ def plot_equity_curves(df, outdir, methods):
 
 def plot_method_overlays(df, outdir, methods, metrics):
 
+    # Optionally exclude metrics that get dedicated figures
+    metrics = [m for m in metrics if m not in {"gmvp_sharpe", "turnover_l1"}]
+
+    if not metrics:
+        return
+
     n = len(metrics)
 
     fig = plt.figure(figsize=(12, 2.5 * n))
@@ -189,6 +195,11 @@ def plot_method_overlays(df, outdir, methods, metrics):
 
 def plot_rolling_median(df, outdir, methods, metrics, window):
 
+    metrics = [m for m in metrics if m not in {"gmvp_sharpe", "turnover_l1"}]
+
+    if not metrics:
+        return
+
     fig = plt.figure(figsize=(12, 2.5 * len(metrics)))
 
     for i, metric in enumerate(metrics):
@@ -214,6 +225,58 @@ def plot_rolling_median(df, outdir, methods, metrics, window):
         ax.grid(alpha=0.3)
 
     _savefig(os.path.join(outdir, f"rolling_median_{window}d.png"))
+
+
+# -------------------------------------------------------
+# dedicated GMVP Sharpe and turnover plots
+# -------------------------------------------------------
+
+def plot_gmvp_sharpe(df, outdir, methods):
+
+    cols = _metric_cols(df, "gmvp_sharpe", methods)
+    if not cols:
+        return
+
+    # Collect values for robust y-axis scaling
+    all_vals = []
+    for c in cols.values():
+        v = pd.to_numeric(df[c], errors="coerce")
+        all_vals.append(v.values)
+    import numpy as np
+    all_arr = np.concatenate(all_vals)
+    finite = all_arr[np.isfinite(all_arr)]
+    if finite.size > 0:
+        q1 = np.percentile(finite, 5)
+        q99 = np.percentile(finite, 95)
+    else:
+        q1, q99 = -1.0, 1.0
+
+    plt.figure(figsize=(12, 4))
+    for m, c in cols.items():
+        plt.plot(df[c], label=m, alpha=0.9 if m in {"model", "mix"} else 0.6)
+    plt.title("GMVP Sharpe over time")
+    plt.ylabel("Sharpe")
+    plt.grid(alpha=0.3)
+    plt.legend()
+    # Clip y-axis to focus on the interesting range, ignoring extreme warm-up spikes
+    plt.ylim(q1, q99)
+    _savefig(os.path.join(outdir, "gmvp_sharpe_timeseries.png"))
+
+
+def plot_turnover_l1(df, outdir, methods):
+
+    cols = _metric_cols(df, "turnover_l1", methods)
+    if not cols:
+        return
+
+    plt.figure(figsize=(12, 4))
+    for m, c in cols.items():
+        plt.plot(df[c], label=m, alpha=0.9 if m in {"model", "mix"} else 0.6)
+    plt.title("GMVP turnover (L1) over time")
+    plt.ylabel("turnover L1")
+    plt.grid(alpha=0.3)
+    plt.legend()
+    _savefig(os.path.join(outdir, "gmvp_turnover_l1_timeseries.png"))
 
 
 # -------------------------------------------------------
@@ -285,6 +348,70 @@ def plot_winrate_grid(
 
 
 # -------------------------------------------------------
+# cumulative win counts (since start)
+# -------------------------------------------------------
+
+def plot_cumulative_wins(
+    df,
+    outdir,
+    ref,
+    methods,
+    metrics,
+    higher_is_better,
+):
+    """
+    For each metric and baseline, plot cumulative number of dates up to t
+    where ref beats the baseline on that metric.
+    """
+
+    baselines = [m for m in methods if m not in {"model", "mix"}]
+
+    rows = len(metrics)
+    cols = len(baselines)
+
+    fig = plt.figure(figsize=(4 * cols, 3 * rows))
+
+    plot_id = 1
+
+    for i, metric in enumerate(metrics):
+
+        ref_col = f"{ref}_{metric}"
+        if ref_col not in df.columns:
+            continue
+
+        ref_s = df[ref_col]
+
+        for j, m in enumerate(baselines):
+
+            c = f"{m}_{metric}"
+            if c not in df.columns:
+                continue
+
+            ax = fig.add_subplot(rows, cols, plot_id)
+            plot_id += 1
+
+            win = _win_series(ref_s, df[c], metric, higher_is_better)
+            cum_wins = win.cumsum()
+
+            ax.plot(cum_wins.index, cum_wins.values, linewidth=2)
+
+            ax.set_title(f"{ref} vs {m} ({metric})", fontsize=9)
+            ax.grid(alpha=0.3)
+
+            if j == 0:
+                ax.set_ylabel("# wins so far")
+            if i == rows - 1:
+                ax.set_xlabel("date")
+
+    fig.suptitle(
+        f"Cumulative wins: {ref} vs roll / pers / shrink",
+        fontsize=16,
+        y=0.995
+    )
+    _savefig(os.path.join(outdir, f"cumulative_wins_{ref}.png"))
+
+
+# -------------------------------------------------------
 # main
 # -------------------------------------------------------
 
@@ -333,6 +460,10 @@ def main():
 
     plot_rolling_median(df, outdir, methods, metrics, roll_window)
 
+    # dedicated Sharpe / turnover plots
+    plot_gmvp_sharpe(df, outdir, methods)
+    plot_turnover_l1(df, outdir, methods)
+
     # -------------------------
     # winrate figures
     # -------------------------
@@ -348,6 +479,14 @@ def main():
             win_window=win_window,
             higher_is_better=higher_is_better
         )
+        plot_cumulative_wins(
+            df,
+            outdir,
+            ref="model",
+            methods=methods,
+            metrics=metrics,
+            higher_is_better=higher_is_better,
+        )
 
     if "mix" in methods:
 
@@ -359,6 +498,14 @@ def main():
             metrics=metrics,
             win_window=win_window,
             higher_is_better=higher_is_better
+        )
+        plot_cumulative_wins(
+            df,
+            outdir,
+            ref="mix",
+            methods=methods,
+            metrics=metrics,
+            higher_is_better=higher_is_better,
         )
 
     print("\nSaved figures:")

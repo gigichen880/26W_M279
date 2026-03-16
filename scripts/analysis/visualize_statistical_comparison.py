@@ -112,7 +112,8 @@ def compare_vs_reference(
     df,
     reference="model",
     baselines=("roll", "pers", "shrink"),
-    metrics=("fro", "logeuc", "gmvp_sharpe", "gmvp_var", "turnover_l1"),
+    # use Stein and KL instead of Log-Euclidean distance
+    metrics=("fro", "stein", "kl", "gmvp_sharpe", "gmvp_var", "turnover_l1"),
 ):
     """
     Compare reference method vs baselines.
@@ -194,7 +195,8 @@ def normalize_difference(metric_name: str, raw_diff: float) -> float:
 
 METRIC_LABELS_PLOT = {
     "fro": "Frobenius Error\n(lower is better)",
-    "logeuc": "Log-Euclidean Distance\n(lower is better)",
+    "stein": "Stein Loss\n(lower is better)",
+    "kl": "Gaussian KL Divergence\n(lower is better)",
     "gmvp_sharpe": "GMVP Sharpe\n(higher is better)",
     "gmvp_var": "GMVP Variance\n(lower is better)",
     "turnover_l1": "Turnover L1\n(lower is better)",
@@ -202,7 +204,8 @@ METRIC_LABELS_PLOT = {
 
 KEY_METRICS_PLOT = [
     "fro",
-    "logeuc",
+    "stein",
+    "kl",
     "gmvp_sharpe",
     "gmvp_var",
     "turnover_l1",

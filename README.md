@@ -31,6 +31,7 @@ This project implements similarity-based covariance forecasting for US equities 
 See [docs/FILE_ORGANIZATION_RULES.md](docs/FILE_ORGANIZATION_RULES.md) for detailed file organization rules.
 
 **Quick reference:**
+
 - **Data:** `data/raw/`, `data/processed/`, `data/universes/`, `data/docs/`
 - **Scripts:** `scripts/data_extraction/`, `scripts/universe_selection/`, `scripts/data_validation/`, `scripts/analysis/`
 - **Results:** `results/eda/figures/`, `results/eda/reports/`, `results/latex_tables/`
@@ -112,9 +113,8 @@ similarity_forecast/embeddings.py
 
 Examples:
 
-* `CorrEigenEmbedder`
-* `VolStatsEmbedder`
-
+- `CorrEigenEmbedder`
+- `VolStatsEmbedder`
 
 ### Stage 2 — Regime Inference (GMM)
 
@@ -131,7 +131,6 @@ Implemented in:
 ```
 similarity_forecast/regimes.py
 ```
-
 
 ### Stage 3 — Transition Estimation & Filtering
 
@@ -225,8 +224,8 @@ $$
 
 Aggregation supports:
 
-* Euclidean mean
-* Log-Euclidean SPD mean (for covariance matrices)
+- Euclidean mean
+- Log-Euclidean SPD mean (for covariance matrices)
 
 Implemented in:
 
@@ -240,16 +239,16 @@ similarity_forecast/pipeline_regime.py
 
 For each anchor time $t$, the model produces:
 
-* Regime-aware forecast object (covariance, correlation, or volatility)
-* Filtered regime posterior $\alpha_t$
-* Optional diagnostics:
-
-  * Neighbor indices
-  * Similarity weights $\kappa_i$
-  * Regime-conditioned forecasts $\hat{y}^{(k)}$
-  * Neighbor regime probabilities $\pi_{t_i}(k)$
+- Regime-aware forecast object (covariance, correlation, or volatility)
+- Filtered regime posterior $\alpha_t$
+- Optional diagnostics:
+  - Neighbor indices
+  - Similarity weights $\kappa_i$
+  - Regime-conditioned forecasts $\hat{y}^{(k)}$
+  - Neighbor regime probabilities $\pi_{t_i}(k)$
 
 ### Architecture Overview
+
 ```
 similarity_forecast/
 │
@@ -263,7 +262,6 @@ similarity_forecast/
 ```
 
 Stage 6 (transition-ahead regime forecasting) can be added on top of this foundation.
-
 
 ## Handling Missing Data
 
@@ -336,22 +334,22 @@ We report a mix of matrix accuracy, probabilistic scoring, correlation skill, an
 
 ### Matrix Errors
 
-* **`fro`** — Frobenius norm
-  || Sigma_hat_t − Sigma_t ||_F
+- **`fro`** — Frobenius norm
+  || Sigma_hat_t − Sigma_t ||\_F
 
-* **`kl`** — Gaussian KL divergence
+- **`kl`** — Gaussian KL divergence
   KL( N(0, Sigma_t) || N(0, Sigma_hat_t) )
 
-* **`stein`** — Stein loss
+- **`stein`** — Stein loss
   tr(Sigma_hat^{-1} Sigma) − log det(Sigma_hat^{-1} Sigma) − N
 
 ---
 
 ### Predictive Likelihood
 
-* **`nll`** — Gaussian negative log-likelihood of realized future returns
+- **`nll`** — Gaussian negative log-likelihood of realized future returns
   Average over horizon days of:
-  0.5 * ( log det(Sigma_hat_t) + r' Sigma_hat_t^{-1} r )
+  0.5 \* ( log det(Sigma_hat_t) + r' Sigma_hat_t^{-1} r )
 
 This evaluates how well the forecast explains actual realized returns.
 
@@ -359,12 +357,12 @@ This evaluates how well the forecast explains actual realized returns.
 
 ### SPD / Spectral Structure
 
-* **`logeuc`** — Log-Euclidean distance
-  || log(Sigma_hat_t) − log(Sigma_t) ||_F
+- **`logeuc`** — Log-Euclidean distance
+  || log(Sigma_hat_t) − log(Sigma_t) ||\_F
 
-* **`eig_log_mse`** — Mean squared error between log eigenvalues
+- **`eig_log_mse`** — Mean squared error between log eigenvalues
 
-* **`cond_ratio`** — Condition number ratio
+- **`cond_ratio`** — Condition number ratio
   cond(Sigma_hat_t) / cond(Sigma_t)
 
 These capture structural and conditioning differences between covariance matrices.
@@ -373,9 +371,9 @@ These capture structural and conditioning differences between covariance matrice
 
 ### Correlation Structure
 
-* **`corr_offdiag_fro`** — Frobenius error on off-diagonal entries of correlation matrices
+- **`corr_offdiag_fro`** — Frobenius error on off-diagonal entries of correlation matrices
 
-* **`corr_spearman`** — Spearman rank correlation between upper-triangle correlation entries
+- **`corr_spearman`** — Spearman rank correlation between upper-triangle correlation entries
 
 These isolate correlation forecasting skill separately from volatility scale.
 
@@ -383,18 +381,17 @@ These isolate correlation forecasting skill separately from volatility scale.
 
 ### Portfolio-Based Evaluation
 
-* **`pred_var` / `real_var`**
+- **`pred_var` / `real_var`**
   Predicted vs realized variance of the ridge-regularized Global Minimum Variance Portfolio (GMVP).
 
-* **`port_mse_logvar`**
+- **`port_mse_logvar`**
   Mean squared error of log variance across a fixed set of evaluation portfolios
   (equal-weight + random long-only portfolios).
 
-* **Stability diagnostics**
-
-  * `turnover_l1` — L1 turnover of GMVP weights
-  * `w_hhi` — Herfindahl concentration index
-  * `w_max_abs` — Maximum absolute weight
+- **Stability diagnostics**
+  - `turnover_l1` — L1 turnover of GMVP weights
+  - `w_hhi` — Herfindahl concentration index
+  - `w_max_abs` — Maximum absolute weight
 
 ---
 
@@ -403,11 +400,13 @@ These isolate correlation forecasting skill separately from volatility scale.
 ### 1. Main Backtest (Walk-Forward Evaluation)
 
 Run the complete evaluation pipeline with all baselines:
+
 ```bash
 python run_backtest.py --config configs/regime_similarity.yaml
 ```
 
 **Outputs:**
+
 - `results/regime_similarity_backtest.parquet` - Full results (all methods, all dates)
 - `results/regime_similarity_backtest.csv` - Same in CSV format
 - `results/regime_similarity_report.csv` - Summary statistics by method
@@ -417,9 +416,28 @@ python run_backtest.py --config configs/regime_similarity.yaml
 
 ---
 
-### 2. Regime Analysis & Visualization
+### 2. Standard Evaluation Plots
+
+Generate time-series plots of all metrics:
+
+```bash
+python -m scripts.analysis.visualize_backtest_results \
+  --config configs/viz_regime_similarity.yaml
+```
+
+**Outputs:**
+
+- `results/figs_regime_similarity/raw_temporal/equity_curves_gmvp.png`
+- `results/figs_regime_similarity/raw_temporal/method_overlays.png`
+- `results/figs_regime_similarity/raw_temporal/rolling_median_21d.png`
+- `results/figs_regime_similarity/raw_temporal/rolling_winrate_ref_*.png`
+
+---
+
+### 3. Regime Analysis & Visualization
 
 #### Generate All Regime Figures
+
 ```bash
 # Regime timeline, probability evolution, filtering effect
 python scripts/analysis/visualize_regimes.py
@@ -435,6 +453,7 @@ python scripts/analysis/performance_by_regime.py
 ```
 
 **Outputs:**
+
 - `results/figs_regime_similarity/regime_timeline.png`
 - `results/figs_regime_similarity/regime_probs_stacked.png`
 - `results/figs_regime_similarity/regime_filtering_effect.png`
@@ -445,9 +464,10 @@ python scripts/analysis/performance_by_regime.py
 
 ---
 
-### 3. K Ablation Study
+### 4. K Ablation Study
 
 Test model with different numbers of regimes (K=1,2,3,4,5,6):
+
 ```bash
 # Run ablation (6 backtests, takes ~30-60 min)
 python scripts/analysis/run_k_ablation.py
@@ -457,6 +477,7 @@ python scripts/analysis/analyze_k_ablation.py
 ```
 
 **Outputs:**
+
 - `results/ablation_k/backtest_k{1-6}.parquet` - Results for each K
 - `results/ablation_k_comparison.csv` - Comparison table
 - `results/figs_regime_similarity/ablation_k_regimes.png` - 4-panel figure
@@ -464,98 +485,22 @@ python scripts/analysis/analyze_k_ablation.py
 
 ---
 
-### 4. Statistical Comparison
+### 5. Statistical Comparison
 
 Compare model vs all baselines with paired t-tests:
+
 ```bash
 python scripts/analysis/statistical_comparison.py
 ```
 
 **Outputs:**
+
 - `results/statistical_comparison.csv` - t-test results for all method pairs
-- Console output with significance markers (**, ***)
+- Console output with significance markers (**, \***)
 
 ---
 
-### 5. Standard Evaluation Plots
-
-Generate time-series plots of all metrics:
-```bash
-python scripts/analysis/viz_backtest_results.py --config configs/viz_regime_similarity.yaml
-```
-
-**Outputs:**
-- `results/figs_regime_similarity/equity_curves_gmvp.png`
-- `results/figs_regime_similarity/method_overlays.png`
-- `results/figs_regime_similarity/rolling_median_21d.png`
-- `results/figs_regime_similarity/rolling_winrate_ref_*.png`
-- `results/figs_regime_similarity/skill_timeseries_*.png`
-
----
-
-### 6. Quick Demo (Single Prediction)
-
-Test pipeline on a single anchor point:
-```bash
-python run_regime_similarity.py
-```
-
-**Note:** This is for testing only - uses different data file and parameters
-than main evaluation.
-
----
-
-## Complete Analysis Pipeline (Run All)
-
-To regenerate all results and figures from scratch:
-```bash
-# Main backtest
-python run_backtest.py --config configs/regime_similarity.yaml
-
-# Regime analysis
-python scripts/analysis/visualize_regimes.py
-python scripts/analysis/regime_characterization.py
-python scripts/analysis/visualize_transition_matrix.py
-
-# K ablation
-python scripts/analysis/run_k_ablation.py
-python scripts/analysis/analyze_k_ablation.py
-
-# Statistical tests
-python scripts/analysis/statistical_comparison.py
-
-# Standard plots
-python scripts/analysis/viz_backtest_results.py --config configs/viz_regime_similarity.yaml
-```
-
-**Total duration:** ~1-2 hours (most time is K ablation)
-
----
-
-## Key Result Files
-
-After running complete pipeline:
-
-**Metrics & Tables:**
-- `results/regime_similarity_report.csv` - Summary by method
-- `results/regime_characterization.csv` - Regime statistics
-- `results/ablation_k_comparison.csv` - K ablation results
-- `results/statistical_comparison.csv` - Significance tests
-- `results/transition_matrix.csv` - Transition probabilities
-
-**Figures (10 main figures):**
-1. `regime_timeline.png` - Regime assignments with crisis periods
-2. `performance_by_regime.png` - Model vs Roll by regime
-3. `ablation_k_regimes.png` - K=1-6 comparison
-4. `ablation_crisis_vs_normal.png` - Crisis vs normal performance
-5. `equity_curves_gmvp.png` - Cumulative wealth
-6. `regime_probs_stacked.png` - Regime probability evolution
-7. `regime_filtering_effect.png` - Markov filtering demonstration
-8. `transition_matrix_heatmap.png` - Regime transition probabilities
-9. `rolling_median_21d.png` - Temporal performance
-10. `method_overlays.png` - Metric time series
-
-### Neighbor-Based Case Studies
+### 6. Neighbor-Based Case Studies
 
 To understand which historical episodes the model reuses for a given evaluation date, use the
 neighbor case-study tool:
@@ -572,6 +517,7 @@ This assumes the main backtest has already been run so that
 `results/regime_similarity_backtest.{parquet,csv}` exists.
 
 **Per-date outputs:**
+
 - `results/case_studies/neighbors_YYYYMMDD.csv`  
   Neighbor diagnostics: `neighbor_date`, `lag_days`, `dist_embedding`, kernel weight `kappa`,
   per-regime neighbor probabilities `pi_neighbor_regime_k`, regime-aware weights `W_regime_k`,
@@ -583,22 +529,85 @@ This assumes the main backtest has already been run so that
   anchor date shown as a dashed vertical line.
 
 Typical anchors:
+
 - GFC stress: `2008-11-21`
 - COVID crash: `2020-03-09`
 
+### 7. Quick Demo (Single Prediction)
+
+Test pipeline on a single anchor point:
+
+```bash
+python run_regime_similarity.py
+```
+
+**Note:** This is for testing only - uses different data file and parameters
+than main evaluation.
+
+---
+
+## Complete Analysis Pipeline (Run All)
+
+To regenerate all results and figures from scratch:
+
+```bash
+# Main backtest
+python run_backtest.py --config configs/regime_similarity.yaml
+
+# Evaluative Metrics
+python -m scripts.analysis.visualize_backtest_results \
+  --config configs/viz_regime_similarity.yaml
+
+# Regime analysis
+python scripts/analysis/visualize_regimes.py
+python scripts/analysis/regime_characterization.py
+python scripts/analysis/visualize_transition_matrix.py
+
+# K ablation
+python scripts/analysis/run_k_ablation.py
+python scripts/analysis/analyze_k_ablation.py
+
+# Statistical tests
+python scripts/analysis/visualize_statistical_comparison.py
+
+
+```
+
+**Total duration:** ~1-2 hours (most time is K ablation)
+
+---
+
+## Key Result Files
+
+After running complete pipeline:
+
+**Metrics & Tables:**
+
+- `results/regime_similarity_report.csv` - Summary by method
+- `results/regime_characterization.csv` - Regime statistics
+- `results/ablation_k_comparison.csv` - K ablation results
+- `results/statistical_comparison.csv` - Significance tests
+- `results/transition_matrix.csv` - Transition probabilities
+
+**Figures (10 main figures):**
+
+1. `regime_timeline.png` - Regime assignments with crisis periods
+2. `performance_by_regime.png` - Model vs Roll by regime
+3. `ablation_k_regimes.png` - K=1-6 comparison
+4. `ablation_crisis_vs_normal.png` - Crisis vs normal performance
+5. `equity_curves_gmvp.png` - Cumulative wealth
+6. `regime_probs_stacked.png` - Regime probability evolution
+7. `regime_filtering_effect.png` - Markov filtering demonstration
+8. `transition_matrix_heatmap.png` - Regime transition probabilities
+9. `rolling_median_21d.png` - Temporal performance
+10. `method_overlays.png` - Metric time series
+
 **Raw Results:**
+
 - `results/regime_similarity_backtest.parquet` - Full backtest data
 - `results/ablation_k/backtest_k{1-6}.parquet` - Ablation data
 
 See [docs/RESULTS_FINAL_REPORT.md](docs/RESULTS_FINAL_REPORT.md) for result summaries and figure captions.
-
-## Next Steps
-
-1. Implement similarity-based forecasting pipeline (Done)
-2. SPD geometry (log-Euclidean representations) (Done)
-3. Regime detection (Done)
-4. GMVP backtesting.
-5. Comparison vs baselines (HAR, DCC-GARCH, Ledoit-Wolf).
 
 ## References
 

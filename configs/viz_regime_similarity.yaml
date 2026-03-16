@@ -5,14 +5,14 @@ inputs:
 
 outputs:
   outdir: "results/figs_regime_similarity/raw_temporal"
-  prefix: ""   # optional filename prefix like "v1_" (leave "" for none)
+  prefix: "" # optional filename prefix like "v1_" (leave "" for none)
 
 plot:
   roll_window: 21
   winroll_window: 63
 
-  # methods: ["model","mix","roll","shrink"]
-  methods: ["model","mix", "shrink"]
+  methods: ["model", "mix", "roll", "shrink", "pers"]
+  # methods: ["model","mix", "shrink"]
 
   # Two "reference methods" to measure skill/winrate vs all others.
   # Set to [] to disable.
