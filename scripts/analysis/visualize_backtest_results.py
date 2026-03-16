@@ -1,19 +1,21 @@
-# scripts/analysis/viz_backtest_results.py
+# scripts/analysis/visualize_backtest_results.py
 
 """
 Clean visualization for regime similarity backtests.
 
-Produces:
+Produces (config-driven via configs/viz_regime_similarity.yaml):
 
-1. model vs baselines win-rate grid
-2. mix vs baselines win-rate grid
-3. method overlays
-4. rolling medians
-5. equity curves
+1. Equity curves (GMVP cumulative wealth)
+2. Method overlays (multi-metric time series, excluding Sharpe/turnover)
+3. Rolling medians of overlay metrics
+4. Dedicated GMVP Sharpe and turnover L1 time series
+5. Covariance error (Fro) over time — main forecast-quality series
+6. Cumulative advantage (running sum of ref minus baseline error) — narrative figure
+
+Rolling winrate and cumulative wins grids are no longer generated (removed as low signal).
 
 Usage:
-python -m scripts.analysis.visualize_backtest_results \
-  --config configs/viz_regime_similarity.yaml
+  python -m scripts.analysis.visualize_backtest_results --config configs/viz_regime_similarity.yaml
 """
 
 from __future__ import annotations
@@ -66,58 +68,6 @@ def _metric_cols(df: pd.DataFrame, metric: str, methods: List[str]):
             out[m] = c
 
     return out
-
-
-# -------------------------------------------------------
-# winrate utilities
-# -------------------------------------------------------
-
-def _is_higher_better(metric: str, higher_is_better: set[str]):
-    return metric in higher_is_better
-
-
-def _win_series(ref, other, metric, higher_is_better):
-
-    ok = ref.notna() & other.notna()
-
-    w = pd.Series(np.nan, index=ref.index)
-
-    if _is_higher_better(metric, higher_is_better):
-        w.loc[ok] = (ref.loc[ok] > other.loc[ok]).astype(float)
-    else:
-        w.loc[ok] = (ref.loc[ok] < other.loc[ok]).astype(float)
-
-    return w
-
-
-def plot_winrate_colored(dates, winrate, ax, title):
-
-    ax.plot(dates, winrate, linewidth=2, label="rolling winrate")
-
-    ax.axhline(0.5, linestyle="--", color="black", alpha=0.7, label="50%")
-
-    ax.fill_between(
-        dates,
-        0.5,
-        winrate,
-        where=(winrate > 0.5),
-        color="green",
-        alpha=0.25,
-    )
-
-    ax.fill_between(
-        dates,
-        0.5,
-        winrate,
-        where=(winrate <= 0.5),
-        color="red",
-        alpha=0.25,
-    )
-
-    ax.set_ylim(0, 1)
-    ax.set_title(title, fontsize=10)
-
-    ax.grid(alpha=0.3)
 
 
 # -------------------------------------------------------
@@ -242,7 +192,6 @@ def plot_gmvp_sharpe(df, outdir, methods):
     for c in cols.values():
         v = pd.to_numeric(df[c], errors="coerce")
         all_vals.append(v.values)
-    import numpy as np
     all_arr = np.concatenate(all_vals)
     finite = all_arr[np.isfinite(all_arr)]
     if finite.size > 0:
@@ -280,135 +229,67 @@ def plot_turnover_l1(df, outdir, methods):
 
 
 # -------------------------------------------------------
-# winrate grid (key figure)
+# covariance error over time (main forecast-quality series)
 # -------------------------------------------------------
 
-def plot_winrate_grid(
+def plot_covariance_error_timeseries(df, outdir, methods, error_metric: str = "fro"):
+    """
+    Plot covariance forecast error (e.g. Frobenius) over time for all methods.
+    Lower is better; shows when each method does well or poorly.
+    """
+    cols = _metric_cols(df, error_metric, methods)
+    if not cols:
+        return
+    plt.figure(figsize=(12, 4))
+    for m, c in cols.items():
+        plt.plot(df[c], label=m, alpha=0.9 if m in {"model", "mix"} else 0.6)
+    plt.title(f"Covariance forecast error ({error_metric}) over time")
+    plt.ylabel(error_metric)
+    plt.legend()
+    plt.grid(alpha=0.3)
+    # Clip y-axis to avoid extreme spikes dominating
+    all_vals = np.concatenate([pd.to_numeric(df[c], errors="coerce").values for c in cols.values()])
+    finite = all_vals[np.isfinite(all_vals)]
+    if finite.size > 0:
+        plt.ylim(0, np.percentile(finite, 98))
+    _savefig(os.path.join(outdir, f"covariance_error_{error_metric}_timeseries.png"))
+
+
+# -------------------------------------------------------
+# cumulative advantage (narrative: ref vs baselines over time)
+# -------------------------------------------------------
+
+def plot_cumulative_advantage(
     df,
     outdir,
-    ref,
-    methods,
-    metrics,
-    win_window,
-    higher_is_better
-):
-
-    baselines = [m for m in methods if m not in {"model", "mix"}]
-
-    rows = len(metrics)
-    cols = len(baselines)
-
-    fig = plt.figure(figsize=(4 * cols, 3 * rows))
-
-    plot_id = 1
-
-    for i, metric in enumerate(metrics):
-
-        ref_col = f"{ref}_{metric}"
-
-        if ref_col not in df.columns:
-            continue
-
-        ref_s = df[ref_col]
-
-        for j, m in enumerate(baselines):
-
-            c = f"{m}_{metric}"
-
-            if c not in df.columns:
-                continue
-
-            ax = fig.add_subplot(rows, cols, plot_id)
-
-            plot_id += 1
-
-            win = _win_series(ref_s, df[c], metric, higher_is_better)
-
-            wr = win.rolling(win_window).mean()
-
-            plot_winrate_colored(
-                wr.index,
-                wr.values,
-                ax,
-                f"{ref} vs {m} ({metric})"
-            )
-
-            if j == 0:
-                ax.set_ylabel("win rate")
-
-            if i == rows - 1:
-                ax.set_xlabel("date")
-
-    fig.suptitle(
-        f"{win_window}d rolling win-rate: {ref} vs roll / pers / shrink",
-        fontsize=16,
-        y=0.995
-    )
-    _savefig(os.path.join(outdir, f"rolling_winrate_{ref}.png"))
-
-
-# -------------------------------------------------------
-# cumulative win counts (since start)
-# -------------------------------------------------------
-
-def plot_cumulative_wins(
-    df,
-    outdir,
-    ref,
-    methods,
-    metrics,
-    higher_is_better,
+    ref: str,
+    methods: List[str],
+    metric: str = "fro",
 ):
     """
-    For each metric and baseline, plot cumulative number of dates up to t
-    where ref beats the baseline on that metric.
+    For each baseline, plot cumsum(baseline - ref) so positive = reference better.
+    Lower-is-better metric (e.g. fro): positive cumsum means ref had lower error.
     """
-
-    baselines = [m for m in methods if m not in {"model", "mix"}]
-
-    rows = len(metrics)
-    cols = len(baselines)
-
-    fig = plt.figure(figsize=(4 * cols, 3 * rows))
-
-    plot_id = 1
-
-    for i, metric in enumerate(metrics):
-
-        ref_col = f"{ref}_{metric}"
-        if ref_col not in df.columns:
+    ref_col = f"{ref}_{metric}"
+    if ref_col not in df.columns:
+        return
+    ref_s = pd.to_numeric(df[ref_col], errors="coerce")
+    baselines = [m for m in methods if m != ref]
+    plt.figure(figsize=(12, 4))
+    for m in baselines:
+        c = f"{m}_{metric}"
+        if c not in df.columns:
             continue
-
-        ref_s = df[ref_col]
-
-        for j, m in enumerate(baselines):
-
-            c = f"{m}_{metric}"
-            if c not in df.columns:
-                continue
-
-            ax = fig.add_subplot(rows, cols, plot_id)
-            plot_id += 1
-
-            win = _win_series(ref_s, df[c], metric, higher_is_better)
-            cum_wins = win.cumsum()
-
-            ax.plot(cum_wins.index, cum_wins.values, linewidth=2)
-
-            ax.set_title(f"{ref} vs {m} ({metric})", fontsize=9)
-            ax.grid(alpha=0.3)
-
-            if j == 0:
-                ax.set_ylabel("# wins so far")
-            if i == rows - 1:
-                ax.set_xlabel("date")
-
-    fig.suptitle(
-        f"Cumulative wins: {ref} vs roll / pers / shrink",
-        fontsize=16,
-        y=0.995
-    )
-    _savefig(os.path.join(outdir, f"cumulative_wins_{ref}.png"))
+        base_s = pd.to_numeric(df[c], errors="coerce")
+        diff = base_s - ref_s  # positive when ref better (lower error)
+        cum = diff.cumsum()
+        plt.plot(cum.index, cum.values, label=f"{ref} vs {m}")
+    plt.axhline(0, color="black", linestyle="--", alpha=0.7)
+    plt.title(f"Cumulative advantage: {ref} vs baselines ({metric}, positive = {ref} better)")
+    plt.ylabel("Cumulative difference")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    _savefig(os.path.join(outdir, f"cumulative_advantage_{ref}_{metric}.png"))
 
 
 # -------------------------------------------------------
@@ -446,11 +327,7 @@ def main():
 
     metrics = cfg["plot"]["overlay_metrics"]
 
-    higher_is_better = set(cfg["plot"]["higher_is_better"])
-
     roll_window = cfg["plot"]["roll_window"]
-
-    win_window = cfg["plot"]["winroll_window"]
 
     print("methods:", methods)
 
@@ -460,53 +337,16 @@ def main():
 
     plot_rolling_median(df, outdir, methods, metrics, roll_window)
 
-    # dedicated Sharpe / turnover plots
     plot_gmvp_sharpe(df, outdir, methods)
     plot_turnover_l1(df, outdir, methods)
 
-    # -------------------------
-    # winrate figures
-    # -------------------------
+    # Main result: covariance error over time
+    plot_covariance_error_timeseries(df, outdir, methods, error_metric="fro")
 
-    if "model" in methods:
-
-        plot_winrate_grid(
-            df,
-            outdir,
-            ref="model",
-            methods=methods,
-            metrics=metrics,
-            win_window=win_window,
-            higher_is_better=higher_is_better
-        )
-        plot_cumulative_wins(
-            df,
-            outdir,
-            ref="model",
-            methods=methods,
-            metrics=metrics,
-            higher_is_better=higher_is_better,
-        )
-
-    if "mix" in methods:
-
-        plot_winrate_grid(
-            df,
-            outdir,
-            ref="mix",
-            methods=methods,
-            metrics=metrics,
-            win_window=win_window,
-            higher_is_better=higher_is_better
-        )
-        plot_cumulative_wins(
-            df,
-            outdir,
-            ref="mix",
-            methods=methods,
-            metrics=metrics,
-            higher_is_better=higher_is_better,
-        )
+    # Cumulative advantage (narrative: when does ref beat baselines?)
+    for ref in ("model", "mix"):
+        if ref in methods:
+            plot_cumulative_advantage(df, outdir, ref=ref, methods=methods, metric="fro")
 
     print("\nSaved figures:")
 
