@@ -8,6 +8,7 @@ data:
   end_date: "2021-12-31"
 
 model:
+  target: "covariance"   # "covariance" | "volatility"
   lookback: 50
   horizon: 20
 
@@ -80,4 +81,4 @@ stability:
 
 outputs:
   outdir: "results"
-  tag: "regime_similarity"
+  tag: "regime_covariance"

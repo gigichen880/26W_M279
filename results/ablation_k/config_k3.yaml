@@ -54,4 +54,4 @@ stability:
   apply_floor_to: gmvp_only
 outputs:
   outdir: results
-  tag: regime_similarity
+  tag: regime_covariance

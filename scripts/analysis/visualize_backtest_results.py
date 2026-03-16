@@ -3,7 +3,7 @@
 """
 Clean visualization for regime similarity backtests.
 
-Produces (config-driven via configs/viz_regime_similarity.yaml):
+Produces (config-driven via configs/viz_regime_covariance.yaml):
 
 1. Equity curves (GMVP cumulative wealth)
 2. Method overlays (multi-metric time series, excluding Sharpe/turnover)
@@ -15,7 +15,7 @@ Produces (config-driven via configs/viz_regime_similarity.yaml):
 Rolling winrate and cumulative wins grids are no longer generated (removed as low signal).
 
 Usage:
-  python -m scripts.analysis.visualize_backtest_results --config configs/viz_regime_similarity.yaml
+  python -m scripts.analysis.visualize_backtest_results --config configs/viz_regime_covariance.yaml
 """
 
 from __future__ import annotations
@@ -234,7 +234,7 @@ def plot_turnover_l1(df, outdir, methods):
 
 def plot_covariance_error_timeseries(df, outdir, methods, error_metric: str = "fro"):
     """
-    Plot covariance forecast error (e.g. Frobenius) over time for all methods.
+    Plot forecast error (e.g. Frobenius for cov, vol_mse for vol) over time for all methods.
     Lower is better; shows when each method does well or poorly.
     """
     cols = _metric_cols(df, error_metric, methods)
@@ -243,7 +243,8 @@ def plot_covariance_error_timeseries(df, outdir, methods, error_metric: str = "f
     plt.figure(figsize=(12, 4))
     for m, c in cols.items():
         plt.plot(df[c], label=m, alpha=0.9 if m in {"model", "mix"} else 0.6)
-    plt.title(f"Covariance forecast error ({error_metric}) over time")
+    title = f"Forecast error ({error_metric}) over time"
+    plt.title(title)
     plt.ylabel(error_metric)
     plt.legend()
     plt.grid(alpha=0.3)
@@ -302,7 +303,7 @@ def main():
 
     ap.add_argument(
         "--config",
-        default="configs/viz_regime_similarity.yaml"
+        default="configs/viz_regime_covariance.yaml"
     )
 
     ap.add_argument("--set", action="append", default=[])
@@ -340,13 +341,15 @@ def main():
     plot_gmvp_sharpe(df, outdir, methods)
     plot_turnover_l1(df, outdir, methods)
 
-    # Main result: covariance error over time
-    plot_covariance_error_timeseries(df, outdir, methods, error_metric="fro")
+    # Main result: forecast error over time (configurable for cov=fro or vol=vol_mse)
+    error_metric = cfg["plot"].get("error_metric", "fro")
+    plot_covariance_error_timeseries(df, outdir, methods, error_metric=error_metric)
 
     # Cumulative advantage (narrative: when does ref beat baselines?)
+    cum_metric = cfg["plot"].get("cumulative_advantage_metric", error_metric)
     for ref in ("model", "mix"):
         if ref in methods:
-            plot_cumulative_advantage(df, outdir, ref=ref, methods=methods, metric="fro")
+            plot_cumulative_advantage(df, outdir, ref=ref, methods=methods, metric=cum_metric)
 
     print("\nSaved figures:")
 

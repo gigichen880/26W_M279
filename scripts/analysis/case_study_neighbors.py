@@ -15,7 +15,7 @@ For a chosen evaluation date (one of the backtest dates), this script:
 
 Usage (from repo root):
   python -m scripts.analysis.case_study_neighbors \\
-      --config configs/regime_similarity.yaml \\
+      --config configs/regime_covariance.yaml \\
       --date 2018-02-05 \\
       --k_neighbors 10
 
@@ -48,7 +48,7 @@ def _load_backtest_row(backtest_path: Path, date_str: str) -> pd.Series:
     if not backtest_path.exists():
         raise FileNotFoundError(
             f"Backtest not found at {backtest_path}. "
-            f"Run: python run_backtest.py --config configs/regime_similarity.yaml"
+            "Run: python run_backtest.py --config configs/regime_covariance.yaml or configs/regime_volatility.yaml"
         )
 
     if backtest_path.suffix == ".parquet":
@@ -79,6 +79,7 @@ def _build_model_from_cfg(cfg: dict) -> tuple:
     acfg = cfg["aggregator"]
 
     model = build_model(
+        target_type=str(mcfg.get("target", "covariance")),
         lookback=int(mcfg["lookback"]),
         horizon=int(mcfg["horizon"]),
         ddof=int(mcfg["ddof"]),
@@ -98,6 +99,8 @@ def _build_model_from_cfg(cfg: dict) -> tuple:
         verbose_skip=bool(ecfg["verbose_skip"]),
         aggregator_name=str(acfg["name"]),
         eps_spd=float(acfg["eps_spd"]),
+        knn_metric=str(mcfg.get("knn_metric", "l2")),
+        regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
     )
     return model, mcfg
 
@@ -121,9 +124,10 @@ def _case_study_neighbors(cfg_path: str, date_str: str, k_neighbors: Optional[in
     returns_df.index = pd.to_datetime(returns_df.index)
     returns_df = returns_df.sort_index()
 
-    # Identify the anchor index used in the main backtest for this date
-    backtest_parquet = RESULTS_DIR / "regime_similarity_backtest.parquet"
-    backtest_csv = RESULTS_DIR / "regime_similarity_backtest.csv"
+    # Backtest path from config tag (works for both covariance and volatility)
+    tag = str(cfg.get("outputs", {}).get("tag", "regime_covariance"))
+    backtest_parquet = RESULTS_DIR / f"{tag}_backtest.parquet"
+    backtest_csv = RESULTS_DIR / f"{tag}_backtest.csv"
     backtest_path = backtest_parquet if backtest_parquet.exists() else backtest_csv
     row = _load_backtest_row(backtest_path, date_str)
     raw_anchor = int(row["raw_anchor"])
@@ -152,15 +156,18 @@ def _case_study_neighbors(cfg_path: str, date_str: str, k_neighbors: Optional[in
 
     k_case = int(k_neighbors) if k_neighbors is not None else int(bcfg["k_neighbors"])
 
-    Sigma_hat, alpha_t, pi_t, neighbors_info = model.predict_at_raw_anchor(
+    use_filter = str(cfg.get("model", {}).get("regime_weighting", "filtered")).lower() == "filtered"
+    pred = model.predict_at_raw_anchor(
         past=past,
         raw_anchor=raw_anchor,
         k_neighbors=k_case,
-        use_filter=True,
+        use_filter=use_filter,
         neighbor_gap=int(bcfg["neighbor_gap"]),
         return_regime=True,
         return_neighbors=True,
     )
+    # Unpack: cov returns (Sigma_hat, alpha, pi, neighbors_info); vol returns (vol_hat, alpha, pi, neighbors_info)
+    _, alpha_t, pi_t, neighbors_info = pred[0], pred[1], pred[2], pred[3]
 
     nbr_raw = neighbors_info["raw_anchors"]
     nbr_dates = neighbors_info["dates"]
@@ -286,7 +293,7 @@ def _case_study_neighbors(cfg_path: str, date_str: str, k_neighbors: Optional[in
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Neighbor case-study tool for regime-aware similarity backtest.")
-    ap.add_argument("--config", type=str, default="configs/regime_similarity.yaml", help="Path to main YAML config.")
+    ap.add_argument("--config", type=str, default="configs/regime_covariance.yaml", help="Path to main YAML config.")
     ap.add_argument("--date", type=str, required=True, help="Case-study evaluation date (YYYY-MM-DD) matching backtest.")
     ap.add_argument("--k_neighbors", type=int, default=None, help="Optional number of neighbors for the case study.")
     ap.add_argument(

@@ -1,7 +1,8 @@
 """
-Visualize regime transition matrix to show persistence and transition patterns.
+Visualize regime transition matrix (works for both covariance and volatility backtests).
 """
 
+import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -10,8 +11,19 @@ import pandas as pd
 import seaborn as sns
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BACKTEST = REPO_ROOT / "results" / "regime_similarity_backtest.parquet"
-DEFAULT_FIGS_DIR = REPO_ROOT / "results" / "figs_regime_similarity"
+RESULTS_DIR = REPO_ROOT / "results"
+
+
+def _default_paths(target: str):
+    if target == "volatility":
+        p = RESULTS_DIR / "regime_volatility_backtest.parquet"
+        if not p.exists():
+            p = RESULTS_DIR / "regime_volatility_backtest.csv"
+        return p, RESULTS_DIR / "figs_regime_volatility"
+    p = RESULTS_DIR / "regime_covariance_backtest.parquet"
+    if not p.exists():
+        p = RESULTS_DIR / "regime_covariance_backtest.csv"
+    return p, RESULTS_DIR / "figs_regime_covariance"
 
 
 def extract_transition_matrix(backtest_results_path=None):
@@ -25,7 +37,7 @@ def extract_transition_matrix(backtest_results_path=None):
     For now, estimate from observed transitions in backtest results.
     """
     if backtest_results_path is None:
-        backtest_results_path = DEFAULT_BACKTEST
+        backtest_results_path = RESULTS_DIR / "regime_covariance_backtest.parquet"
     path = Path(backtest_results_path)
     if not path.exists():
         raise FileNotFoundError(f"Backtest file not found: {path}")
@@ -77,7 +89,7 @@ def plot_transition_matrix(
         save_path: Where to save figure
     """
     if save_path is None:
-        save_path = DEFAULT_FIGS_DIR / "transition_matrix_heatmap.png"
+        save_path = RESULTS_DIR / "figs_regime_covariance" / "transition_matrix_heatmap.png"
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -205,37 +217,41 @@ def print_transition_analysis(transition_matrix, regime_names=None):
 
 
 def main():
-    """Generate transition matrix visualization and analysis."""
+    """Generate transition matrix visualization and analysis (cov or vol backtest)."""
+    ap = argparse.ArgumentParser(description="Transition matrix from backtest (cov or vol)")
+    ap.add_argument("--input", default=None, help="Backtest parquet/csv")
+    ap.add_argument("--target", choices=("auto", "covariance", "volatility"), default="auto")
+    args = ap.parse_args()
+
+    if args.input is not None:
+        backtest_path = Path(args.input)
+        target = args.target if args.target != "auto" else ("volatility" if "volatility" in str(args.input) else "covariance")
+        _, figs_dir = _default_paths(target)
+    else:
+        target = args.target if args.target != "auto" else "covariance"
+        backtest_path, figs_dir = _default_paths(target)
+        if not backtest_path.exists() and args.target == "auto":
+            backtest_path, figs_dir = _default_paths("volatility")
+    figs_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "=" * 80)
     print("TRANSITION MATRIX VISUALIZATION")
     print("=" * 80 + "\n")
 
-    # Extract transition matrix from results
     print("Extracting transition matrix from backtest results...")
-    transition_matrix = extract_transition_matrix()
+    transition_matrix = extract_transition_matrix(backtest_path)
 
     print(f"✓ Extracted {transition_matrix.shape[0]}×{transition_matrix.shape[1]} matrix")
     print("\nTransition Matrix (A):")
     print(transition_matrix)
     print()
 
-    # Regime names (from previous characterization)
-    regime_names = [
-        "Calm Bull",
-        "Moderate Bull",
-        "Normal",
-        "High Stress",
-    ]
-
-    # Print analysis
+    regime_names = ["Calm Bull", "Moderate Bull", "Normal", "High Stress"]
     print_transition_analysis(transition_matrix, regime_names)
 
-    # Create visualization
     print("Creating heatmap...")
-    plot_transition_matrix(transition_matrix, regime_names)
+    plot_transition_matrix(transition_matrix, regime_names, save_path=figs_dir / "transition_matrix_heatmap.png")
 
-    # Save matrix to CSV
     results_dir = REPO_ROOT / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     df_matrix = pd.DataFrame(
@@ -243,7 +259,8 @@ def main():
         index=[f"From_{name}" for name in regime_names],
         columns=[f"To_{name}" for name in regime_names],
     )
-    csv_path = results_dir / "transition_matrix.csv"
+    csv_name = "transition_matrix_volatility.csv" if "volatility" in str(backtest_path) else "transition_matrix.csv"
+    csv_path = results_dir / csv_name
     df_matrix.to_csv(csv_path)
     print(f"✓ Saved matrix to {csv_path}")
 

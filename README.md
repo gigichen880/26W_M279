@@ -4,11 +4,6 @@
 
 This project implements similarity-based covariance forecasting for US equities using daily/minutely return data. We build a clean universe of high-quality stocks, extract returns, and (in the pipeline phase) apply SPD geometry, regime detection, and GMVP backtesting against baselines (HAR, DCC-GARCH, Ledoit-Wolf).
 
-## Team
-
-- Devansh Mishra
-- Zhiyi Chen
-
 ## Project Structure
 
 ```
@@ -86,7 +81,7 @@ The regime-aware similarity forecasting engine lives under `similarity_forecast/
 This module implements a **5-stage regime-aware similarity framework** for volatility, covariance, and correlation forecasting.
 
 ```bash
-python run_regime_similarity.py
+python run_regime_covariance.py
 ```
 
 For each anchor time $t$:
@@ -270,7 +265,7 @@ The pipeline handles NAs (missing returns) at several stages:
 ### 1. Data filtering (optional)
 
 - Optionally filter out stocks with >30% missing data before fitting.
-- Toggle in `run_regime_similarity.py` via `FILTER_HIGH_NA_STOCKS`, or use `SimilarityConfig.filter_high_na_stocks` and `high_na_threshold`.
+- Toggle in `run_regime_covariance.py` via `FILTER_HIGH_NA_STOCKS`, or use `SimilarityConfig.filter_high_na_stocks` and `high_na_threshold`.
 
 ### 2. Window validation
 
@@ -402,17 +397,35 @@ These isolate correlation forecasting skill separately from volatility scale.
 Run the complete evaluation pipeline with all baselines:
 
 ```bash
-python run_backtest.py --config configs/regime_similarity.yaml
+python run_backtest.py --config configs/regime_covariance.yaml
 ```
 
 **Outputs:**
 
-- `results/regime_similarity_backtest.parquet` - Full results (all methods, all dates)
-- `results/regime_similarity_backtest.csv` - Same in CSV format
-- `results/regime_similarity_report.csv` - Summary statistics by method
-- `results/regime_similarity_config_used.yaml` - Config snapshot
+- `results/regime_covariance_backtest.parquet` - Full results (all methods, all dates)
+- `results/regime_covariance_backtest.csv` - Same in CSV format
+- `results/regime_covariance_report.csv` - Summary statistics by method
+- `results/regime_covariance_config_used.yaml` - Config snapshot
 
 **Duration:** ~5-10 minutes
+
+**Target type:** The pipeline is target-agnostic. In config, `model.target` can be `"covariance"` (default) or `"volatility"`. **Volatility = realized volatility:** the target is computed from the future-window sample covariance as sqrt(diag(Σ)) (optionally log), i.e. realized vol per asset over the horizon. For the vol task, the same walk-forward loop runs with EuclideanMean aggregation and scalar metrics (vol_mse, vol_mae, vol_rmse); no GMVP.
+
+**Volatility backtest (same pipeline):**
+
+```bash
+python run_backtest.py --config configs/regime_volatility.yaml
+```
+
+Outputs: `results/regime_volatility_backtest.{parquet,csv}`, `results/regime_volatility_report.csv`. Then visualize with:
+
+```bash
+python -m scripts.analysis.visualize_backtest_results --config configs/viz_regime_volatility.yaml
+```
+
+Figures go to `results/figs_regime_volatility/raw_temporal/` (error and cumulative-advantage use `vol_mse`).
+
+**Embedder choice:** For **covariance** forecasting, `pca` or `corr_eig` are appropriate (they capture return/factor or correlation structure). For **realized vol** forecasting, `embedder.name: "vol_stats"` is recommended: it embeds the past window’s vol distribution (mean + quantiles of log vol), so kNN similarity aligns with “similar past vol regime.” The volatility config uses `vol_stats` by default; you can set `embedder.name: "pca"` or `"corr_eig"` to reuse the same embedding as the covariance run. If **vol MSE is poor** (model worse than baselines): increase **`mixing.vol_dampen_toward_roll`** (e.g. 0.2–0.3), lower **`mixing.mix_lambda`**, and run the statistical comparison for vol (§5).
 
 ---
 
@@ -422,15 +435,15 @@ Generate time-series plots of all metrics:
 
 ```bash
 python -m scripts.analysis.visualize_backtest_results \
-  --config configs/viz_regime_similarity.yaml
+  --config configs/viz_regime_covariance.yaml
 ```
 
 **Outputs:**
 
-- `results/figs_regime_similarity/raw_temporal/equity_curves_gmvp.png`
-- `results/figs_regime_similarity/raw_temporal/method_overlays.png`
-- `results/figs_regime_similarity/raw_temporal/rolling_median_21d.png`
-- `results/figs_regime_similarity/raw_temporal/rolling_winrate_ref_*.png`
+- `results/figs_regime_covariance/raw_temporal/equity_curves_gmvp.png`
+- `results/figs_regime_covariance/raw_temporal/method_overlays.png`
+- `results/figs_regime_covariance/raw_temporal/rolling_median_21d.png`
+- `results/figs_regime_covariance/raw_temporal/rolling_winrate_ref_*.png`
 
 ---
 
@@ -438,65 +451,93 @@ python -m scripts.analysis.visualize_backtest_results \
 
 #### Generate All Regime Figures
 
+All regime scripts support **covariance** (default) and **volatility** via `--target` and `--input`:
+
 ```bash
-# Regime timeline, probability evolution, filtering effect
+# Regime timeline, probability evolution, filtering effect (default: covariance)
 python scripts/analysis/visualize_regimes.py
+python scripts/analysis/visualize_regimes.py --target volatility
 
 # Regime characterization table
-python scripts/analysis/regime_characterization.py
+python scripts/analysis/regime_characterization.py --input results/regime_covariance_backtest.parquet
+python scripts/analysis/regime_characterization.py --input results/regime_volatility_backtest.parquet --target volatility
 
 # Transition matrix heatmap
-python scripts/analysis/visualize_transition_matrix.py
+python scripts/analysis/visualize_transition_matrix.py --target volatility
 
 # Performance by regime
-python scripts/analysis/performance_by_regime.py
+python scripts/analysis/performance_by_regime.py --input results/regime_volatility_backtest.parquet --target volatility
 ```
 
-**Outputs:**
-
-- `results/figs_regime_similarity/regime_timeline.png`
-- `results/figs_regime_similarity/regime_probs_stacked.png`
-- `results/figs_regime_similarity/regime_filtering_effect.png`
-- `results/figs_regime_similarity/transition_matrix_heatmap.png`
-- `results/figs_regime_similarity/performance_by_regime.png`
-- `results/regime_characterization.csv`
-- `results/transition_matrix.csv`
+**Outputs (covariance):** `results/figs_regime_covariance/`, `results/regime_characterization.csv`, `results/transition_matrix.csv`  
+**Outputs (volatility):** `results/figs_regime_volatility/`, `results/regime_characterization_volatility.csv`, etc.
 
 ---
 
 ### 4. K Ablation Study
 
-Test model with different numbers of regimes (K=1,2,3,4,5,6):
+Test model with different numbers of regimes (K=1,2,3,4,5,6). Works for **covariance** and **volatility**:
 
 ```bash
-# Run ablation (6 backtests, takes ~30-60 min)
-python scripts/analysis/run_k_ablation.py
-
-# Analyze results
+# Covariance (default): run ablation, then analyze
+python scripts/analysis/run_k_ablation.py --config configs/regime_covariance.yaml
 python scripts/analysis/analyze_k_ablation.py
+
+# Volatility: use vol config and target
+python scripts/analysis/run_k_ablation.py --config configs/regime_volatility.yaml
+python scripts/analysis/analyze_k_ablation.py --ablation-dir results/ablation_k_regime_volatility --target volatility
+```
+
+**Outputs (cov):** `results/ablation_k/`, `results/ablation_k/ablation_k_comparison.csv`, `results/figs_regime_covariance/ablation_k_regimes.png` (4-panel)  
+**Outputs (vol):** `results/ablation_k_regime_volatility/`, same comparison CSV and 2-panel figure under `results/figs_regime_volatility/`
+
+---
+
+### 4b. Pipeline design ablation (one axis at a time)
+
+Isolate the effect of high-level design choices (embedder, distance, transition, regime aggregation/weighting) without sweeping hyperparameters:
+
+```bash
+# Covariance: embedder (pca, corr_eig), transition_estimator (hard, soft), knn_metric (l2, l1), regime_aggregation (soft, hard), regime_weighting (filtered, raw_pi)
+python -m scripts.analysis.run_ablation --config configs/ablation_covariance.yaml
+
+# Volatility: same axes; embedder choices include vol_stats
+python -m scripts.analysis.run_ablation --config configs/ablation_volatility.yaml
 ```
 
 **Outputs:**
 
-- `results/ablation_k/backtest_k{1-6}.parquet` - Results for each K
-- `results/ablation_k_comparison.csv` - Comparison table
-- `results/figs_regime_similarity/ablation_k_regimes.png` - 4-panel figure
-- `results/figs_regime_similarity/ablation_crisis_vs_normal.png` - Crisis vs normal comparison
+- `results/ablation_covariance/ablation_summary.csv` (or `ablation_volatility/`) — one row per axis/choice with primary metric mean (e.g. `model_fro`, `mix_fro` for cov; `model_vol_mse` for vol) and optional extra metrics.
+
+**Axes:**
+
+| Axis | Choices | Description |
+|------|---------|-------------|
+| `embedder` | pca, corr_eig (vol: + vol_stats) | Window embedding for similarity |
+| `transition_estimator` | hard, soft | How transition matrix A is estimated |
+| `knn_metric` | l2, l1 | Neighbor distance (Euclidean vs Manhattan) |
+| `regime_aggregation` | soft, hard | Weights over regimes: α vs one-hot argmax(α) |
+| `regime_weighting` | filtered, raw_pi | Use filtered α vs raw GMM π |
 
 ---
 
 ### 5. Statistical Comparison
 
-Compare model vs all baselines with paired t-tests:
+Compare model/mix vs baselines with paired t-tests (same script for covariance and volatility):
 
 ```bash
-python scripts/analysis/statistical_comparison.py
+# Covariance (default: regime_covariance backtest)
+python scripts/analysis/visualize_statistical_comparison.py
+
+# Volatility
+python scripts/analysis/visualize_statistical_comparison.py --input results/regime_volatility_backtest.parquet --target volatility
 ```
 
 **Outputs:**
 
-- `results/statistical_comparison.csv` - t-test results for all method pairs
-- Console output with significance markers (**, \***)
+- `results/figs_regime_covariance/statistical_comparison/model_vs_baselines.png`, `mix_vs_baselines.png` (cov)
+- `results/figs_regime_volatility/statistical_comparison/model_vs_baselines.png`, `mix_vs_baselines.png` (vol)
+- Green = reference better than baseline; red = worse; ** / *** = significance at 5% / 1%
 
 ---
 
@@ -506,15 +547,14 @@ To understand which historical episodes the model reuses for a given evaluation 
 neighbor case-study tool:
 
 ```bash
-# Example: COVID crash case study (anchor 2020-03-09)
+# Example: COVID crash (covariance)
 python -m scripts.analysis.case_study_neighbors \
-  --config configs/regime_similarity.yaml \
+  --config configs/regime_covariance.yaml \
   --date 2020-03-09 \
   --k_neighbors 10
 ```
 
-This assumes the main backtest has already been run so that
-`results/regime_similarity_backtest.{parquet,csv}` exists.
+This assumes the main backtest has already been run so that the corresponding backtest parquet exists (e.g. `results/regime_covariance_backtest.parquet`). For **volatility**, use `--config configs/regime_volatility.yaml` (requires `results/regime_volatility_backtest.parquet`).
 
 **Per-date outputs:**
 
@@ -538,7 +578,7 @@ Typical anchors:
 Test pipeline on a single anchor point:
 
 ```bash
-python run_regime_similarity.py
+python run_regime_covariance.py
 ```
 
 **Note:** This is for testing only - uses different data file and parameters
@@ -552,11 +592,11 @@ To regenerate all results and figures from scratch:
 
 ```bash
 # Main backtest
-python run_backtest.py --config configs/regime_similarity.yaml
+python run_backtest.py --config configs/regime_covariance.yaml
 
 # Evaluative Metrics
 python -m scripts.analysis.visualize_backtest_results \
-  --config configs/viz_regime_similarity.yaml
+  --config configs/viz_regime_covariance.yaml
 
 # Regime analysis
 python scripts/analysis/visualize_regimes.py
@@ -569,9 +609,9 @@ python scripts/analysis/analyze_k_ablation.py
 
 # Statistical tests
 python scripts/analysis/visualize_statistical_comparison.py
-
-
 ```
+
+For **volatility**, run the same sequence using `configs/regime_volatility.yaml` and `configs/viz_regime_volatility.yaml`, and pass `--target volatility` (and `--input results/regime_volatility_backtest.parquet` where applicable) to regime and statistical-comparison scripts; use `--config configs/regime_volatility.yaml` for `run_k_ablation.py` and `--ablation-dir results/ablation_k_regime_volatility --target volatility` for `analyze_k_ablation.py`.
 
 **Total duration:** ~1-2 hours (most time is K ablation)
 
@@ -583,7 +623,7 @@ After running complete pipeline:
 
 **Metrics & Tables:**
 
-- `results/regime_similarity_report.csv` - Summary by method
+- `results/regime_covariance_report.csv` - Summary by method
 - `results/regime_characterization.csv` - Regime statistics
 - `results/ablation_k_comparison.csv` - K ablation results
 - `results/statistical_comparison.csv` - Significance tests
@@ -604,7 +644,7 @@ After running complete pipeline:
 
 **Raw Results:**
 
-- `results/regime_similarity_backtest.parquet` - Full backtest data
+- `results/regime_covariance_backtest.parquet` - Full backtest data
 - `results/ablation_k/backtest_k{1-6}.parquet` - Ablation data
 
 See [docs/RESULTS_FINAL_REPORT.md](docs/RESULTS_FINAL_REPORT.md) for result summaries and figure captions.

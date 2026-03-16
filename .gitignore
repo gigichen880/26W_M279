@@ -36,7 +36,7 @@ inspection_figures/
 *.swo
 .DS_Store
 
-# Results: ignore large parquets only; result CSVs and figs_regime_similarity/*.png are committable
+# Results: ignore large parquets only; result CSVs and figs_regime_covariance/*.png are committable
 results/*.parquet
 results/ablation_k/*.parquet
 results/eda/figures/*.png

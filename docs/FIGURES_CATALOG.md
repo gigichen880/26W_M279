@@ -1,13 +1,13 @@
-# Figure catalog — results/figs_regime_similarity/
+# Figure catalog — results/figs_regime_covariance/
 
 Catalog and assessment of all generated figures for the final report.  
-*Source: `scripts/analysis/viz_backtest_results.py` + `configs/viz_regime_similarity.yaml`.*
+*Source: `scripts/analysis/viz_backtest_results.py` + `configs/viz_regime_covariance.yaml`.*
 
 ---
 
 ## STEP 1: List and categorize
 
-**All files in `results/figs_regime_similarity/`:**
+**All files in `results/figs_regime_covariance/`:**
 
 | # | Filename | Size (approx) |
 |---|----------|----------------|

@@ -6,7 +6,7 @@ Investigate why the Persistence method shows high cumulative equity (e.g. >10 in
 
 ## Data
 
-- **Source:** `results/regime_similarity_backtest.parquet` (or `.csv`)
+- **Source:** `results/regime_covariance_backtest.parquet` (or `.csv`)
 - **Structure:** One row per evaluation date; columns `pers_gmvp_cumret`, `roll_gmvp_cumret`, `pers_gmvp_mean`, `roll_gmvp_mean`, etc.
 
 ## Findings (from current backtest file)
@@ -50,7 +50,7 @@ This will:
 1. Load the backtest and report regime/cumret stats.
 2. Print suspicious dates (same-day pers/roll ratio > 3 or < 1/3).
 3. Print 2021 comparison and extreme |pers_gmvp_mean|.
-4. Optionally save `results/figs_regime_similarity/pers_vs_roll_investigation.png` (pers vs roll gmvp_cumret and cumulative equity over time).
+4. Optionally save `results/figs_regime_covariance/pers_vs_roll_investigation.png` (pers vs roll gmvp_cumret and cumulative equity over time).
 
 ## Suspicious dates (summary)
 

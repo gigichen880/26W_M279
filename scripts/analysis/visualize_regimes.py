@@ -1,12 +1,13 @@
 """
 Visualize regime assignments over time with market event annotations.
 
-Expects backtest results with regime columns: regime_assigned, regime_prob_0..K-1, regime_raw_0..K-1.
-Run: python run_backtest.py --config configs/regime_similarity.yaml first to generate them.
+Works for both covariance and volatility backtests. Expects regime columns:
+regime_assigned, regime_prob_0..K-1, regime_raw_0..K-1.
 
 Usage:
   python scripts/analysis/visualize_regimes.py
-  python scripts/analysis/visualize_regimes.py --backtest results/regime_similarity_backtest.parquet --outdir results/figs_regime_similarity
+  python scripts/analysis/visualize_regimes.py --target volatility
+  python scripts/analysis/visualize_regimes.py --backtest results/regime_volatility_backtest.parquet --outdir results/figs_regime_volatility/regime
 """
 
 from __future__ import annotations
@@ -18,10 +19,31 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Default paths (repo root = parent of scripts/)
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BACKTEST = REPO_ROOT / "results" / "regime_similarity_backtest.parquet"
-DEFAULT_OUTDIR = REPO_ROOT / "results" / "figs_regime_similarity" / "regime"
+RESULTS_DIR = REPO_ROOT / "results"
+
+
+def _default_backtest_and_outdir(target: str):
+    """Return (backtest_path, outdir) for target 'covariance' or 'volatility'."""
+    if target == "volatility":
+        p = RESULTS_DIR / "regime_volatility_backtest.parquet"
+        if not p.exists():
+            p = RESULTS_DIR / "regime_volatility_backtest.csv"
+        return p, RESULTS_DIR / "figs_regime_volatility" / "regime"
+    p = RESULTS_DIR / "regime_covariance_backtest.parquet"
+    if not p.exists():
+        p = RESULTS_DIR / "regime_covariance_backtest.csv"
+    return p, RESULTS_DIR / "figs_regime_covariance" / "regime"
+
+
+def _detect_target_from_path(backtest_path: str | Path) -> str:
+    if "volatility" in str(backtest_path).lower():
+        return "volatility"
+    return "covariance"
+
+
+DEFAULT_BACKTEST = RESULTS_DIR / "regime_covariance_backtest.parquet"
+DEFAULT_OUTDIR = RESULTS_DIR / "figs_regime_covariance" / "regime"
 
 
 def load_regime_data(backtest_file: str | Path = DEFAULT_BACKTEST) -> pd.DataFrame:
@@ -369,21 +391,26 @@ def save_regime_names_mapping(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Visualize regime assignments from backtest results.")
-    parser.add_argument(
-        "--backtest",
-        type=str,
-        default=str(DEFAULT_BACKTEST),
-        help="Path to regime_similarity_backtest.parquet or .csv",
-    )
-    parser.add_argument(
-        "--outdir",
-        type=str,
-        default=str(DEFAULT_OUTDIR),
-        help="Directory for output figures",
-    )
+    parser = argparse.ArgumentParser(description="Visualize regime assignments from backtest results (cov or vol).")
+    parser.add_argument("--target", choices=("auto", "covariance", "volatility"), default="auto",
+                        help="Target type; auto = infer from --backtest path")
+    parser.add_argument("--backtest", type=str, default=None,
+                        help="Path to backtest parquet/csv (default: from --target)")
+    parser.add_argument("--outdir", type=str, default=None, help="Output directory (default: from --target)")
     parser.add_argument("--K", type=int, default=4, help="Number of regimes")
     args = parser.parse_args()
+
+    target = args.target
+    if target == "auto" and args.backtest is not None:
+        target = _detect_target_from_path(args.backtest)
+    elif target == "auto":
+        target = "covariance"
+    if args.backtest is None or args.outdir is None:
+        default_backtest, default_outdir = _default_backtest_and_outdir(target)
+        if args.backtest is None:
+            args.backtest = str(default_backtest)
+        if args.outdir is None:
+            args.outdir = str(default_outdir)
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -419,7 +446,8 @@ def main() -> None:
     if "regime_assigned" not in df.columns:
         print("❌ ERROR: 'regime_assigned' column not found in backtest results!")
         print("   Re-run the backtest with regime saving enabled:")
-        print("   python run_backtest.py --config configs/regime_similarity.yaml")
+        print("   python run_backtest.py --config configs/regime_covariance.yaml")
+        print("   or configs/regime_volatility.yaml")
         return
 
     print("Generating visualizations...")

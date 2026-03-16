@@ -301,7 +301,7 @@ FILES CREATED:
 - returns_universe_100_cleaned_strict.parquet
 - returns_universe_100_cleaned_lenient.parquet
 
-UPDATE run_regime_similarity.py to use:
+UPDATE run_regime_covariance.py to use:
   returns_universe_100_cleaned_moderate.parquet
 """.format(
         len(moderate_remove),

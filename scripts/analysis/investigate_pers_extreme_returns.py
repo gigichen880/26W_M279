@@ -1,11 +1,16 @@
 """
 Investigate why Persistence (pers) method has extreme cumulative returns (>10) in 2021.
 
-Usage: python scripts/analysis/investigate_pers_extreme_returns.py
+Covariance backtest only (uses GMVP columns). For volatility backtest use other analysis scripts.
+
+Usage:
+  python scripts/analysis/investigate_pers_extreme_returns.py
+  python scripts/analysis/investigate_pers_extreme_returns.py --input results/regime_covariance_backtest.parquet
 """
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -16,15 +21,20 @@ RESULTS_DIR = REPO_ROOT / "results"
 
 
 def main() -> None:
-    # Prefer parquet (created by run_backtest.py); fall back to CSV
-    backtest_path = RESULTS_DIR / "regime_similarity_backtest.parquet"
-    if not backtest_path.exists():
-        backtest_path = RESULTS_DIR / "regime_similarity_backtest.csv"
+    ap = argparse.ArgumentParser(description="Investigate pers GMVP extreme returns (covariance backtest only)")
+    ap.add_argument("--input", default=None, help="Covariance backtest parquet/csv (default: regime_covariance_backtest)")
+    args = ap.parse_args()
+    if args.input:
+        backtest_path = Path(args.input)
+    else:
+        backtest_path = RESULTS_DIR / "regime_covariance_backtest.parquet"
+        if not backtest_path.exists():
+            backtest_path = RESULTS_DIR / "regime_covariance_backtest.csv"
     if not backtest_path.exists():
         print("Backtest file not found. Expected one of:")
-        print(f"  {RESULTS_DIR / 'regime_similarity_backtest.parquet'}")
-        print(f"  {RESULTS_DIR / 'regime_similarity_backtest.csv'}")
-        print("Run: python run_backtest.py --config configs/regime_similarity.yaml")
+        print(f"  {RESULTS_DIR / 'regime_covariance_backtest.parquet'}")
+        print(f"  {RESULTS_DIR / 'regime_covariance_backtest.csv'}")
+        print("Run: python run_backtest.py --config configs/regime_covariance.yaml")
         return
 
     if backtest_path.suffix == ".parquet":
@@ -37,6 +47,10 @@ def main() -> None:
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
 
+    if "pers_gmvp_cumret" not in df.columns:
+        print("This script requires a covariance backtest (columns pers_gmvp_cumret, roll_gmvp_cumret, etc.).")
+        print("Volatility backtests do not have GMVP columns. Use --input with regime_covariance_backtest.parquet")
+        return
     # Backtest has one row per date; columns are pers_gmvp_cumret, roll_gmvp_cumret, etc.
     pers_cumret = pd.to_numeric(df["pers_gmvp_cumret"], errors="coerce")
     roll_cumret = pd.to_numeric(df["roll_gmvp_cumret"], errors="coerce")
@@ -150,7 +164,7 @@ def main() -> None:
         ax2.grid(True, alpha=0.3)
         ax2.set_title("Cumulative equity (cumprod(1+gmvp_cumret))")
         plt.tight_layout()
-        out_path = RESULTS_DIR / "figs_regime_similarity" / "pers_vs_roll_investigation.png"
+        out_path = RESULTS_DIR / "figs_regime_covariance" / "pers_vs_roll_investigation.png"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close()

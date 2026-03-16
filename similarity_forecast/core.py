@@ -163,10 +163,11 @@ def validate_window(
 @dataclass
 class ExactKNN:
     """
-    Exact KNN in embedding space using L2 distance.
+    Exact KNN in embedding space. Supports L2 or L1 distance.
     Stores E: [T, d]
     """
     E: NDArray[np.floating]
+    metric: str = "l2"  # "l2" (Euclidean) or "l1" (Manhattan)
 
     def query(
         self,
@@ -175,16 +176,21 @@ class ExactKNN:
         exclude_index: Optional[int] = None,
     ) -> Tuple[NDArray[np.int64], NDArray[np.floating]]:
         diff = self.E - e[None, :]
-        d2 = np.einsum("ij,ij->i", diff, diff)
+        m = str(self.metric).lower()
+        if m == "l1":
+            dist_all = np.sum(np.abs(diff), axis=1).astype(float)
+        else:
+            d2 = np.einsum("ij,ij->i", diff, diff)
+            dist_all = np.sqrt(np.maximum(d2, 0.0)).astype(float)
 
-        if exclude_index is not None and 0 <= exclude_index < d2.shape[0]:
-            d2[exclude_index] = np.inf
+        if exclude_index is not None and 0 <= exclude_index < dist_all.shape[0]:
+            dist_all[exclude_index] = np.inf
 
-        k = min(k, d2.shape[0])
-        idx = np.argpartition(d2, kth=k - 1)[:k]
-        order = np.argsort(d2[idx])
+        k = min(k, dist_all.shape[0])
+        idx = np.argpartition(dist_all, kth=k - 1)[:k]
+        order = np.argsort(dist_all[idx])
         idx = idx[order]
-        dist = np.sqrt(d2[idx])
+        dist = dist_all[idx]
         return idx.astype(np.int64), dist.astype(float)
 
 

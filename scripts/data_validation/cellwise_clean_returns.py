@@ -175,7 +175,7 @@ def main():
     print("  Approach: Surgical removal of only problematic cells")
     print(f"  Data retained: {100-pct_bad:.1f}% (vs 98.7% with day-level cleaning)")
     print("  Report: data/docs/CELLWISE_CLEANING_REPORT.txt")
-    print("\nNext: Update run_regime_similarity.py to use this file.")
+    print("\nNext: Update run_regime_covariance.py to use this file.")
 
 
 if __name__ == "__main__":

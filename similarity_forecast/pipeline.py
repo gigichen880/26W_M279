@@ -92,6 +92,10 @@ class RegimeAwareSimilarityForecaster:
     transition_estimator: str = "hard"  # {"hard","soft"}
     trans_smooth: float = 1.0           # Laplace smoothing λ
 
+    # KNN distance and regime aggregation
+    knn_metric: str = "l2"              # {"l2","l1"} for neighbor search
+    regime_aggregation: str = "soft"    # {"soft","hard"}: soft = alpha weights; hard = one-hot argmax(alpha)
+
     def _build_windows(self, R: NDArray[np.floating]) -> List[Tuple[int, slice, slice]]:
         """
         Returns a list of (anchor_idx, past_slice, fut_slice)
@@ -171,7 +175,7 @@ class RegimeAwareSimilarityForecaster:
 
         self.embeds_ = np.stack(embeds, axis=0).astype(float)   # [T0, D]
         self.targets_ = np.stack(targets, axis=0).astype(float) # [T0, ...]
-        self.knn_ = ExactKNN(self.embeds_)
+        self.knn_ = ExactKNN(self.embeds_, metric=str(self.knn_metric).lower())
 
         # anchor dates for debugging
         if isinstance(returns_df.index, pd.DatetimeIndex):
@@ -294,6 +298,11 @@ class RegimeAwareSimilarityForecaster:
 
                 if not np.all(np.isfinite(alpha)) or float(np.sum(alpha)) <= self.eps:
                     alpha = pi0 if alpha_fallback == "pi" else (np.ones_like(pi0) / max(pi0.size, 1))
+
+        if str(self.regime_aggregation).lower() == "hard":
+            a = np.zeros_like(alpha)
+            a[int(np.argmax(alpha))] = 1.0
+            alpha = a
 
         # ---- Stage 4: retrieve neighbors (overshoot then filter) ----
         k = min(k_neighbors, self.embeds_.shape[0])

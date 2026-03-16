@@ -210,6 +210,61 @@ def baseline_shrink_to_diag(S: np.ndarray, gamma: float = 0.3) -> np.ndarray:
     D = np.diag(np.diag(S))
     return (1.0 - gamma) * S + gamma * D
 
+
+# ---------- Realized volatility (log-vol) baselines and metrics ----------
+def realized_log_vol_from_returns(
+    R: NDArray[np.floating], ddof: int = 1, eps: float = 1e-12
+) -> NDArray[np.floating]:
+    """
+    (T, N) returns -> (N,) log realized vol per asset.
+    Uses sample cov then sqrt(diag) then log; matches VolTarget.target() convention.
+    """
+    S = cov_from_returns(R, ddof=ddof)
+    v = np.sqrt(np.maximum(np.diag(S), eps))
+    return np.log(v).astype(float)
+
+
+def baseline_rolling_vol(past: NDArray[np.floating], ddof: int = 1, eps: float = 1e-12) -> NDArray[np.floating]:
+    """Log realized vol from past window (lookback returns)."""
+    return realized_log_vol_from_returns(past, ddof=ddof, eps=eps)
+
+
+def baseline_persistence_vol(
+    R: NDArray[np.floating], raw_anchor: int, horizon: int, ddof: int = 1, eps: float = 1e-12
+) -> NDArray[np.floating]:
+    """Log realized vol from previous horizon window [raw_anchor-horizon+1 .. raw_anchor+1]."""
+    prev = R[raw_anchor - horizon + 1 : raw_anchor + 1, :]
+    return realized_log_vol_from_returns(prev, ddof=ddof, eps=eps)
+
+
+def baseline_shrink_vol(
+    past: NDArray[np.floating], ddof: int = 1, gamma: float = 0.3, eps: float = 1e-12
+) -> NDArray[np.floating]:
+    """Log vol from shrink-to-diag covariance of past window."""
+    S = cov_from_returns(past, ddof=ddof)
+    S_shrink = baseline_shrink_to_diag(S, gamma=gamma)
+    v = np.sqrt(np.maximum(np.diag(S_shrink), eps))
+    return np.log(v).astype(float)
+
+
+def eval_vol_metrics(
+    vol_hat: NDArray[np.floating], vol_true: NDArray[np.floating]
+) -> dict[str, float]:
+    """
+    Scalar metrics for log-vol prediction (vector vs vector).
+    Lower is better for all.
+    """
+    vh = np.asarray(vol_hat, dtype=float).reshape(-1)
+    vt = np.asarray(vol_true, dtype=float).reshape(-1)
+    if vh.shape != vt.shape:
+        raise ValueError(f"Shape mismatch: vol_hat {vh.shape} vs vol_true {vt.shape}")
+    diff = vh - vt
+    mse = float(np.nanmean(diff ** 2))
+    mae = float(np.nanmean(np.abs(diff)))
+    rmse = float(np.sqrt(mse)) if np.isfinite(mse) else np.nan
+    return {"vol_mse": mse, "vol_mae": mae, "vol_rmse": rmse}
+
+
 def eval_all_metrics(
     Sigma_hat: np.ndarray,
     Sigma_true: np.ndarray,

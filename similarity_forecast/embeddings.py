@@ -50,29 +50,75 @@ class CorrEigenEmbedder:
 @dataclass(frozen=True)
 class VolStatsEmbedder:
     """
-    Simple feature engineering directly from window returns:
-      - log vol quantiles
-      - mean vol
+    Rich volatility-state embedding from a lookback window of returns.
+    Designed for realized-vol forecasting: similarity in embedding ≈ similar past vol regime.
+
+    Features (all derived from per-asset realized vol in the window):
+      - Cross-sectional distribution: mean(log vol), std(log vol), quantiles of log vol
+      - IQR of log vol (spread)
+      - Vol trend: mean over assets of (log vol_2nd_half - log vol_1st_half) — rising vs falling vol
+      - Vol concentration: HHI of vol (normalized); high when one asset dominates
     Output is fixed-d, independent of N.
     """
     ddof: int = 1
     eps: float = 1e-12
-    quantiles: tuple[float, ...] = (0.1, 0.5, 0.9)
+    quantiles: tuple[float, ...] = (0.05, 0.25, 0.5, 0.75, 0.95)
+    include_vol_trend: bool = True
+    include_vol_concentration: bool = True
+
+    def _per_asset_vol(self, R: NDArray[np.floating]) -> NDArray[np.floating]:
+        """(T, N) -> (N,) realized vol per asset. R must be finite (caller imputes). ddof clamped so df >= 0."""
+        T = R.shape[0]
+        ddof_eff = min(self.ddof, max(0, T - 1))
+        v = np.std(R, axis=0, ddof=ddof_eff)
+        return np.maximum(np.abs(v), self.eps)
 
     def embed(self, past_returns: NDArray[np.floating]) -> NDArray[np.floating]:
-        # vol per asset over window (NA-safe: nanstd/nanmean)
-        v = np.nanstd(past_returns, axis=0, ddof=self.ddof)
-        v = np.where(np.isnan(v), 0.0, v)
-        v = np.sqrt(np.maximum(v * v, self.eps))
-        lv = np.log(np.maximum(v, self.eps))
+        past_returns = np.asarray(past_returns, dtype=float)
+        # Impute so every column has full count → no "Degrees of freedom <= 0" in nanstd
+        past_returns = impute_returns_window(past_returns, fill_all_nan=0.0)
+        T, N = past_returns.shape
 
-        feats = [float(np.nanmean(lv))]
+        # Per-asset vol over full window -> log vol
+        v = self._per_asset_vol(past_returns)
+        lv = np.log(v)
+
+        feats: list[float] = []
+        # Cross-sectional distribution
+        feats.append(float(np.nanmean(lv)))
+        feats.append(float(np.nanstd(lv, ddof=1)) if N > 1 else 0.0)
         feats.extend(np.nanquantile(lv, self.quantiles).tolist())
+        # IQR (spread of log-vol distribution)
+        qs = np.nanquantile(lv, [0.25, 0.75])
+        feats.append(float(qs[1] - qs[0]))
+
+        # Vol trend: first half vs second half (only if window long enough)
+        if self.include_vol_trend and T >= 4:
+            mid = T // 2
+            v1 = self._per_asset_vol(past_returns[:mid])
+            v2 = self._per_asset_vol(past_returns[mid:])
+            log_ratio = np.log(np.maximum(v2, self.eps)) - np.log(np.maximum(v1, self.eps))
+            feats.append(float(np.nanmean(log_ratio)))
+        else:
+            feats.append(0.0)
+
+        # Vol concentration (HHI): sum of (vol_i / sum(vol))^2
+        if self.include_vol_concentration and N > 0:
+            v_sum = float(np.sum(v)) + self.eps
+            weights = v / v_sum
+            hhi = float(np.sum(weights ** 2))
+            feats.append(hhi)
+        else:
+            feats.append(0.0)
+
         return np.array(feats, dtype=float)
 
     @property
     def dim(self) -> int:
-        return 1 + len(self.quantiles)
+        n = 2 + len(self.quantiles) + 1  # mean, std, quantiles, IQR
+        n += 1 if self.include_vol_trend else 0
+        n += 1 if self.include_vol_concentration else 0
+        return n
 
 class HybridStateEmbedder:
     """

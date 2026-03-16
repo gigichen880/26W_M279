@@ -77,6 +77,10 @@ class CorrelationTarget:
 
 @dataclass(frozen=True)
 class VolTarget:
+    """
+    Realized volatility target: from future returns window, compute sample covariance,
+    then sqrt(diag(Sigma)) = realized vol per asset over the horizon, optionally in log space.
+    """
     ddof: int = 1
     eps: float = 1e-12
     log: bool = True

@@ -13,8 +13,8 @@ This document consolidates pipeline status, evaluation results, figure catalog, 
 
 | Item | Detail |
 |------|--------|
-| **Entry point** | `run_backtest.py` (YAML-driven). Demo: `run_regime_similarity.py`. |
-| **Configuration** | `configs/regime_similarity.yaml` (data, model, embedder, backtest, mixing, stability). |
+| **Entry point** | `run_backtest.py` (YAML-driven). Demo: `run_regime_covariance.py`. |
+| **Configuration** | `configs/regime_covariance.yaml` (data, model, embedder, backtest, mixing, stability). |
 | **Embedders** | `pca` (PCAWindowEmbedder), `corr_eig` (CorrEigenEmbedder). |
 | **Baselines** | Roll (rolling cov), Pers (persistence), Shrink (shrink to diag), Model (regime similarity), Mix (shrink + model). |
 | **Evaluation** | 5-day stride, 20-day refit (calendar); walk-forward, no look-ahead. |
@@ -34,11 +34,11 @@ This document consolidates pipeline status, evaluation results, figure catalog, 
 
 | Output | Location |
 |--------|----------|
-| Backtest CSV | `results/regime_similarity_backtest.csv` |
-| Backtest parquet | `results/regime_similarity_backtest.parquet` |
-| Report CSV | `results/regime_similarity_report.csv` |
-| Config snapshot | `results/regime_similarity_config_used.yaml` |
-| Figures | `results/figs_regime_similarity/` (7 PNGs) |
+| Backtest CSV | `results/regime_covariance_backtest.csv` |
+| Backtest parquet | `results/regime_covariance_backtest.parquet` |
+| Report CSV | `results/regime_covariance_report.csv` |
+| Config snapshot | `results/regime_covariance_config_used.yaml` |
+| Figures | `results/figs_regime_covariance/` (7 PNGs) |
 
 **Status:** Ready for final report. Backtest and GMVP evaluation are implemented and documented.
 
@@ -120,7 +120,7 @@ RegimeSim gains in **2014, 2015, 2018, 2019**; even in 2017 and 2020; slightly b
 
 # Part 4: Figures for the Final Report
 
-**Location:** `results/figs_regime_similarity/`
+**Location:** `results/figs_regime_covariance/`
 
 ## 4.1 List and Categories
 
@@ -165,14 +165,14 @@ RegimeSim gains in **2014, 2015, 2018, 2019**; even in 2017 and 2020; slightly b
 
 ```bash
 # Backtest (requires data/processed/returns_universe_100.parquet)
-python run_backtest.py --config configs/regime_similarity.yaml
+python run_backtest.py --config configs/regime_covariance.yaml
 
 # Override hyperparameters
-python run_backtest.py --config configs/regime_similarity.yaml \
+python run_backtest.py --config configs/regime_covariance.yaml \
   --set backtest.stride=5 --set model.n_regimes=4
 
 # Figures
-python scripts/analysis/viz_backtest_results.py --config configs/viz_regime_similarity.yaml
+python scripts/analysis/viz_backtest_results.py --config configs/viz_regime_covariance.yaml
 ```
 
 **Random seed:** `model.random_state: 0` in config; passed to RegimeModel and GMM.
@@ -189,10 +189,10 @@ python scripts/analysis/viz_backtest_results.py --config configs/viz_regime_simi
 
 ## 5.3 File Organization (summary)
 
-- **Root:** `run_backtest.py`, `run_regime_similarity.py`, `README.md`, `requirements.txt`, `.gitignore`.
-- **Configs:** `configs/regime_similarity.yaml`, `configs/viz_regime_similarity.yaml`.
+- **Root:** `run_backtest.py`, `run_regime_covariance.py`, `README.md`, `requirements.txt`, `.gitignore`.
+- **Configs:** `configs/regime_covariance.yaml`, `configs/viz_regime_covariance.yaml`.
 - **Scripts:** `scripts/analysis/` (viz_backtest_results, analyze_backtest_*, plot_backtest), `scripts/data_validation/`, `scripts/config_utils.py`, `scripts/clean_data.py`.
-- **Results:** `results/regime_similarity_*.csv`, `results/regime_similarity_*.parquet`, `results/regime_similarity_config_used.yaml`, `results/figs_regime_similarity/*.png`.
+- **Results:** `results/regime_covariance_*.csv`, `results/regime_covariance_*.parquet`, `results/regime_covariance_config_used.yaml`, `results/figs_regime_covariance/*.png`.
 - **Docs:** `docs/` (this file, FILE_ORGANIZATION_RULES.md, COMPLETENESS_CHECKLIST.md, EVALUATION_ANALYSIS_SUMMARY.md, FIGURES_CATALOG.md).
 
 ---

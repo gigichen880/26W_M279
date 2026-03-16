@@ -18,7 +18,7 @@ Based on the proposal and pipeline design:
 | 6 | **Statistical metrics** | ✓ DONE | Frobenius, LogEuc, Stein, KL, NLL, corr_offdiag_fro, corr_spearman, eig_log_mse, cond_ratio in `eval_all_metrics`. |
 | 7 | **Portfolio metrics** | ✓ DONE | GMVP variance, Sharpe, turnover_l1, cumret; weight stats (w_hhi, w_max_abs, w_l1). No drawdown in code (can be computed from cumret). |
 | 8 | **Ablation studies** | ⚠ PARTIAL | No dedicated ablation script. Possible via `--set model.n_regimes=3`, `embedder.name=corr_eig`, etc.; no systematic table of ablations. |
-| 9 | **Figures generated** | ✓ DONE | 7 figures in `results/figs_regime_similarity/` (equity curves, overlays, rolling median, skill, win rate). |
+| 9 | **Figures generated** | ✓ DONE | 7 figures in `results/figs_regime_covariance/` (equity curves, overlays, rolling median, skill, win rate). |
 | 10 | **Results documented** | ✓ DONE | Report CSV, config snapshot, `docs/EVALUATION_ANALYSIS_SUMMARY.md`, `docs/FIGURES_CATALOG.md`, and comprehensive `docs/RESULTS_FINAL_REPORT.md`. |
 
 ---
@@ -29,7 +29,7 @@ Based on the proposal and pipeline design:
 |------|--------|--------|
 | **similarity_forecast/ docstrings** | ✓ Good | Pipeline, embeddings (CorrEigen, VolStats, HybridState, PCA), regimes, core (aggregators, KNN, validate_window), target_objects, backtests have class/function docstrings. |
 | **run_backtest.py documented** | ✓ Yes | Top-of-file docstring with example usage and override examples. |
-| **Configs commented** | ✓ Yes | `configs/regime_similarity.yaml` and `configs/viz_regime_similarity.yaml` have inline comments for key fields. |
+| **Configs commented** | ✓ Yes | `configs/regime_covariance.yaml` and `configs/viz_regime_covariance.yaml` have inline comments for key fields. |
 
 ---
 
@@ -37,7 +37,7 @@ Based on the proposal and pipeline design:
 
 | Check | Status | Notes |
 |-------|--------|--------|
-| **Regenerate results** | ✓ Yes | `python run_backtest.py --config configs/regime_similarity.yaml` produces backtest CSV, parquet, report, config snapshot. |
+| **Regenerate results** | ✓ Yes | `python run_backtest.py --config configs/regime_covariance.yaml` produces backtest CSV, parquet, report, config snapshot. |
 | **Random seeds set** | ✓ Yes | `model.random_state: 0` in YAML; passed to `RegimeModel` and GMM. |
 | **Data paths documented** | ✓ Yes | Config: `data.parquet_path: data/processed/returns_universe_100.parquet`; README and `data/processed/README_returns_data.txt` describe data. |
 
@@ -77,7 +77,7 @@ Based on the proposal and pipeline design:
 
 **LOW PRIORITY (Nice to Have):**
 
-- □ Add a short `results/README_regime_similarity.txt` describing backtest outputs and how to reproduce.
+- □ Add a short `results/README_regime_covariance.txt` describing backtest outputs and how to reproduce.
 - □ Regime visualization: if backtest is extended to save regime IDs per date, add a regime-time plot.
 
 **DOCUMENTATION:**

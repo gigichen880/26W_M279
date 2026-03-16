@@ -1,8 +1,16 @@
 """
-Create comprehensive comparison table: Model vs all baselines.
+Create comprehensive comparison table: Model vs all baselines (covariance or volatility).
+
 Shows actual mean performance and rankings. Backtest is wide format (one row per date,
-columns like model_fro, roll_fro, etc.).
+columns like model_fro, roll_fro, or model_vol_mse, roll_vol_mse, etc.).
+
+Usage:
+  python -m scripts.analysis.full_baseline_comparison
+  python -m scripts.analysis.full_baseline_comparison --input results/regime_volatility_backtest.parquet --target volatility
 """
+from __future__ import annotations
+
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -10,25 +18,29 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = REPO_ROOT / "results"
-DEFAULT_BACKTEST = RESULTS_DIR / "regime_similarity_backtest.parquet"
-DEFAULT_BACKTEST_CSV = RESULTS_DIR / "regime_similarity_backtest.csv"
 
 METHODS = ["model", "roll", "pers", "shrink", "mix"]
-METRICS = {
+METRICS_COV = {
     "fro": "Frobenius",
     "logeuc": "LogEuc",
     "gmvp_sharpe": "GMVP Sharpe",
     "gmvp_var": "GMVP Variance",
     "turnover_l1": "Turnover",
 }
-# Lower is better for ranking
-LOWER_IS_BETTER = {"fro", "logeuc", "gmvp_var", "turnover_l1"}
+METRICS_VOL = {
+    "vol_mse": "Vol MSE",
+    "vol_mae": "Vol MAE",
+    "vol_rmse": "Vol RMSE",
+}
+LOWER_IS_BETTER_COV = {"fro", "logeuc", "gmvp_var", "turnover_l1"}
+LOWER_IS_BETTER_VOL = {"vol_mse", "vol_mae", "vol_rmse"}
 
 
-def load_backtest(path=None):
+def load_backtest(path: str | Path | None):
     """Load backtest (parquet or CSV). Wide format: one row per date."""
-    path = path or (DEFAULT_BACKTEST if DEFAULT_BACKTEST.exists() else DEFAULT_BACKTEST_CSV)
-    path = Path(path)
+    path = Path(path) if path else None
+    if path is None or not path.exists():
+        raise FileNotFoundError(f"Backtest path required and must exist: {path}")
     if not path.exists():
         raise FileNotFoundError(f"Backtest not found: {path}")
     df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
@@ -37,16 +49,18 @@ def load_backtest(path=None):
     return df
 
 
-def create_comparison_table(backtest_file=None):
+def create_comparison_table(backtest_file=None, is_vol: bool = False):
     """
     Create table showing mean (and std) performance of each method on key metrics.
-    Wide format: df has columns model_fro, roll_fro, etc.
+    Wide format: df has columns model_fro, roll_fro, or model_vol_mse, etc.
     """
     df = load_backtest(backtest_file)
+    metrics = METRICS_VOL if is_vol else METRICS_COV
+    lower_better = LOWER_IS_BETTER_VOL if is_vol else LOWER_IS_BETTER_COV
     results = []
     for method in METHODS:
         row = {"Method": method.capitalize()}
-        for metric_key, metric_name in METRICS.items():
+        for metric_key, metric_name in metrics.items():
             col = f"{method}_{metric_key}"
             if col not in df.columns:
                 row[metric_name] = np.nan
@@ -57,25 +71,24 @@ def create_comparison_table(backtest_file=None):
             row[f"{metric_name} Std"] = vals.std()
         results.append(row)
     results_df = pd.DataFrame(results)
-
-    # Rankings: lower is better for fro, logeuc, gmvp_var, turnover; higher for sharpe
-    for metric_key, metric_name in METRICS.items():
+    for metric_key, metric_name in metrics.items():
         if metric_name not in results_df.columns:
             continue
-        ascending = metric_key in LOWER_IS_BETTER
+        ascending = metric_key in lower_better
         results_df[f"{metric_name} Rank"] = results_df[metric_name].rank(ascending=ascending)
     return results_df
 
 
-def print_comparison_table(results_df):
+def print_comparison_table(results_df, is_vol: bool = False):
     """Print formatted table and best performer per metric."""
+    metrics = METRICS_VOL if is_vol else METRICS_COV
     print("\n" + "=" * 100)
-    print("COMPREHENSIVE BASELINE COMPARISON")
+    print("COMPREHENSIVE BASELINE COMPARISON" + (" (volatility)" if is_vol else ""))
     print("=" * 100 + "\n")
 
     # Round for display
     display = results_df.copy()
-    for metric_name in METRICS.values():
+    for metric_name in metrics.values():
         if metric_name in display.columns:
             display[metric_name] = display[metric_name].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
         if f"{metric_name} Std" in display.columns:
@@ -87,7 +100,7 @@ def print_comparison_table(results_df):
 
     print("BEST PERFORMER BY METRIC:")
     print("-" * 100)
-    for metric_name in METRICS.values():
+    for metric_name in metrics.values():
         rank_col = f"{metric_name} Rank"
         if rank_col not in results_df.columns:
             continue
@@ -143,21 +156,41 @@ def analyze_mix_advantage(backtest_file=None):
 
 
 def main():
-    """Run comprehensive comparison and Mix analysis."""
-    backtest_path = DEFAULT_BACKTEST if DEFAULT_BACKTEST.exists() else DEFAULT_BACKTEST_CSV
+    ap = argparse.ArgumentParser(description="Comprehensive baseline comparison (cov or vol)")
+    ap.add_argument("--input", default=None, help="Backtest parquet/csv (default: regime_covariance or regime_volatility)")
+    ap.add_argument("--target", choices=("auto", "covariance", "volatility"), default="auto")
+    args = ap.parse_args()
+    is_vol = args.target == "volatility"
+    if args.input is not None:
+        backtest_path = Path(args.input)
+    else:
+        if args.target == "volatility":
+            backtest_path = RESULTS_DIR / "regime_volatility_backtest.parquet"
+            if not backtest_path.exists():
+                backtest_path = RESULTS_DIR / "regime_volatility_backtest.csv"
+        else:
+            backtest_path = RESULTS_DIR / "regime_covariance_backtest.parquet"
+            if not backtest_path.exists():
+                backtest_path = RESULTS_DIR / "regime_covariance_backtest.csv"
+        if backtest_path.exists() and args.target == "auto":
+            is_vol = "volatility" in str(backtest_path)
     if not backtest_path.exists():
         print(f"Backtest not found: {backtest_path}")
-        print("Run: python run_backtest.py --config configs/regime_similarity.yaml")
+        print("Run: python run_backtest.py --config configs/regime_covariance.yaml (or configs/regime_volatility.yaml)")
         return
 
-    results_df = create_comparison_table()
-    out_csv = RESULTS_DIR / "comprehensive_baseline_comparison.csv"
+    results_df = create_comparison_table(backtest_path, is_vol=is_vol)
+    out_name = "comprehensive_baseline_comparison_volatility.csv" if is_vol else "comprehensive_baseline_comparison.csv"
+    out_csv = RESULTS_DIR / out_name
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     results_df.to_csv(out_csv, index=False)
-    print_comparison_table(results_df)
+    print_comparison_table(results_df, is_vol=is_vol)
     print(f"✓ Saved to {out_csv}\n")
 
-    analyze_mix_advantage()
+    if not is_vol:
+        analyze_mix_advantage(backtest_path)
+    else:
+        print("(Mix/GMVP analysis applies to covariance backtest only.)")
 
 
 if __name__ == "__main__":

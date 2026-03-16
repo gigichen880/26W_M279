@@ -1,28 +1,45 @@
 """
 Verify that regime assignments were properly saved in backtest results.
 
-Run after: python run_backtest.py --config configs/regime_similarity.yaml
-Usage: python scripts/analysis/verify_regime_data.py [path/to/regime_similarity_backtest.parquet]
+Works for any backtest (covariance or volatility). Regime columns are the same.
+
+Usage:
+  python scripts/analysis/verify_regime_data.py
+  python scripts/analysis/verify_regime_data.py --input results/regime_volatility_backtest.parquet
 """
 
 from __future__ import annotations
 
-import sys
+import argparse
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BACKTEST = REPO_ROOT / "results" / "regime_similarity_backtest.parquet"
+RESULTS_DIR = REPO_ROOT / "results"
 
 
 def main() -> None:
-    backtest_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BACKTEST
+    ap = argparse.ArgumentParser(description="Verify regime columns in backtest (cov or vol)")
+    ap.add_argument("--input", default=None, help="Backtest parquet/csv (default: auto-detect)")
+    args = ap.parse_args()
+    if args.input is not None:
+        backtest_path = Path(args.input)
+    else:
+        for name in ("regime_covariance_backtest.parquet", "regime_covariance_backtest.csv",
+                     "regime_volatility_backtest.parquet", "regime_volatility_backtest.csv"):
+            p = RESULTS_DIR / name
+            if p.exists():
+                backtest_path = p
+                break
+        else:
+            backtest_path = RESULTS_DIR / "regime_covariance_backtest.parquet"
     backtest_path = Path(backtest_path)
     if not backtest_path.exists():
         print(f"File not found: {backtest_path}")
-        sys.exit(1)
+        print("Run: python run_backtest.py --config configs/regime_covariance.yaml or configs/regime_volatility.yaml")
+        raise SystemExit(1)
 
     if backtest_path.suffix == ".parquet":
         df = pd.read_parquet(backtest_path)
@@ -52,8 +69,8 @@ def main() -> None:
 
     if "regime_assigned" not in df.columns:
         print("ERROR: 'regime_assigned' column not found!")
-        print("Re-run backtest: python run_backtest.py --config configs/regime_similarity.yaml")
-        sys.exit(1)
+        print("Re-run backtest: python run_backtest.py --config configs/regime_covariance.yaml or configs/regime_volatility.yaml")
+        raise SystemExit(1)
 
     print("Regime distribution:")
     regime_counts = df["regime_assigned"].value_counts().sort_index()
@@ -76,7 +93,7 @@ def main() -> None:
         print()
 
     print("Regime data looks good. Ready for visualization.")
-    print("Run: python scripts/analysis/visualize_regimes.py")
+    print("Run: python scripts/analysis/visualize_regimes.py (or --target volatility)")
     print()
 
 

@@ -14,7 +14,7 @@ python scripts/analysis/verify_regime_data.py
 ```
 Or with explicit path:
 ```bash
-python scripts/analysis/verify_regime_data.py results/regime_similarity_backtest.parquet
+python scripts/analysis/verify_regime_data.py results/regime_covariance_backtest.parquet
 ```
 
 You should see: regime-related columns listed, total evaluation dates, date range, regime distribution, no missing assignments, and probability sums ≈ 1.0.
@@ -30,15 +30,15 @@ python scripts/analysis/visualize_regimes.py
 ```
 
 Optional arguments:
-- `--backtest results/regime_similarity_backtest.parquet`
-- `--outdir results/figs_regime_similarity`
+- `--backtest results/regime_covariance_backtest.parquet`
+- `--outdir results/figs_regime_covariance`
 - `--K 4`
 
 This produces:
 
-- **results/figs_regime_similarity/regime_timeline.png** — Hard regime over time with crisis shading
-- **results/figs_regime_similarity/regime_probs_stacked.png** — Stacked α_t over time
-- **results/figs_regime_similarity/regime_filtering_effect.png** — Raw π vs filtered α by regime
+- **results/figs_regime_covariance/regime_timeline.png** — Hard regime over time with crisis shading
+- **results/figs_regime_covariance/regime_probs_stacked.png** — Stacked α_t over time
+- **results/figs_regime_covariance/regime_filtering_effect.png** — Raw π vs filtered α by regime
 - **results/regime_characterization.csv** — Per-regime stats (n_days, pct_time, mean_fro, mean_gmvp_sharpe, etc.)
 - **results/regime_names_mapping.json** — Suggested names (Regime 0 → "…", etc.)
 
@@ -61,16 +61,16 @@ Use these to tie regime indices to market conditions and to label regimes in the
 
 Open the generated figures and check:
 
-1. **results/figs_regime_similarity/regime_timeline.png**
+1. **results/figs_regime_covariance/regime_timeline.png**
    - Do regimes line up with known stress periods? (e.g. 2008–2009, 2020 COVID, 2015–2016 selloff)
    - Which regime(s) dominate in calm periods (e.g. 2017, 2019)?
 
-2. **results/figs_regime_similarity/regime_probs_stacked.png**
+2. **results/figs_regime_covariance/regime_probs_stacked.png**
    - Are transitions smooth or abrupt?
    - Do regimes persist (probabilities stay high for a while)?
    - Any rapid switching?
 
-3. **results/figs_regime_similarity/regime_filtering_effect.png**
+3. **results/figs_regime_covariance/regime_filtering_effect.png**
    - Is filtered α smoother than raw π?
    - Does the Markov filter reduce noise?
 
@@ -95,7 +95,7 @@ After verification and visualization:
 **REGIME ANALYSIS COMPLETE**
 
 - Regime assignments are in the backtest results (regime_assigned, regime_prob_*, regime_raw_*).
-- Timeline, stacked probabilities, and filtering-effect figures are in **results/figs_regime_similarity/**.
+- Timeline, stacked probabilities, and filtering-effect figures are in **results/figs_regime_covariance/**.
 - Regime characterization and name mapping are in **results/regime_characterization.csv** and **results/regime_names_mapping.json**.
 
 **Next steps:**

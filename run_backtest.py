@@ -1,17 +1,17 @@
 # run_backtest.py
 '''
 Example Usage:
-`python run_backtest.py --config configs/regime_similarity.yaml`
+`python run_backtest.py --config configs/regime_covariance.yaml`
 
 Overrides with hyperparams:
-python run_backtest.py --config configs/regime_similarity.yaml \
+python run_backtest.py --config configs/regime_covariance.yaml \
   --set backtest.stride=1 \
   --set backtest.neighbor_gap=10 \
   --set mixing.mix_lambda=0.15 \
   --set model.sample_stride=10
 
 Switch refit policy:
-python run_backtest.py --config configs/regime_similarity.yaml \
+python run_backtest.py --config configs/regime_covariance.yaml \
   --set backtest.refit_mode=days \
   --set backtest.refit_every_days=20
 
@@ -28,17 +28,22 @@ from scripts.config_utils import load_yaml, deep_update, parse_overrides
 
 from similarity_forecast.backtests import (
     eval_all_metrics,
+    eval_vol_metrics,
     baseline_rolling_cov,
     baseline_persistence_realized_cov,
     baseline_shrink_to_diag,
+    baseline_rolling_vol,
+    baseline_persistence_vol,
+    baseline_shrink_vol,
     gmvp_weights,
     hold_period_portfolio_stats,
 )
-from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder
-from similarity_forecast.target_objects import CovarianceTarget
+from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder, VolStatsEmbedder
+from similarity_forecast.target_objects import CovarianceTarget, VolTarget
 from similarity_forecast.core import (
     LogEuclideanSPDMean,
     ArithmeticSPDMean,
+    EuclideanMean,
     validate_window,
     project_to_spd,
 )
@@ -87,6 +92,7 @@ def trace_ratio_guardrail(S_hat: np.ndarray, S_ref: np.ndarray, lo: float, hi: f
 
 def build_model(
     *,
+    target_type: str,
     lookback: int,
     horizon: int,
     ddof: int,
@@ -106,12 +112,16 @@ def build_model(
     max_window_na_pct: float,
     min_stocks_with_data_pct: float,
     verbose_skip: bool,
-    # aggregator config
+    # aggregator config (eps_spd ignored for target_type volatility)
     aggregator_name: str,
     eps_spd: float,
+    # ablation / design choices
+    knn_metric: str = "l2",
+    regime_aggregation: str = "soft",
 ) -> RegimeAwareSimilarityForecaster:
     embedder_name = str(embedder_name).lower()
     aggregator_name = str(aggregator_name).lower()
+    target_type = str(target_type).lower()
 
     if embedder_name == "corr_eig":
         embedder = CorrEigenEmbedder(k=int(k_eigs))
@@ -124,17 +134,28 @@ def build_model(
             min_stocks_with_data_pct=float(min_stocks_with_data_pct),
             verbose_skip=bool(verbose_skip),
         )
+    elif embedder_name == "vol_stats":
+        # Rich vol embedding: distribution (mean, std, quantiles, IQR), trend (1st vs 2nd half), concentration (HHI).
+        embedder = VolStatsEmbedder(ddof=int(ddof))
     else:
-        raise ValueError("embedder.name must be one of {'pca','corr_eig'}")
+        raise ValueError("embedder.name must be one of {'pca','corr_eig','vol_stats'}")
 
-    target = CovarianceTarget(ddof=int(ddof))
-
-    if aggregator_name == "logeuc":
-        aggregator = LogEuclideanSPDMean(eps_spd=float(eps_spd))
-    elif aggregator_name == "arith":
-        aggregator = ArithmeticSPDMean(eps_spd=float(eps_spd))
+    if target_type == "volatility":
+        target = VolTarget(ddof=int(ddof))
+        if aggregator_name == "euclidean":
+            aggregator = EuclideanMean()
+        else:
+            aggregator = EuclideanMean()  # vol requires vector mean; ignore aggregator_name
+    elif target_type == "covariance":
+        target = CovarianceTarget(ddof=int(ddof))
+        if aggregator_name == "logeuc":
+            aggregator = LogEuclideanSPDMean(eps_spd=float(eps_spd))
+        elif aggregator_name == "arith":
+            aggregator = ArithmeticSPDMean(eps_spd=float(eps_spd))
+        else:
+            raise ValueError("aggregator.name for covariance must be one of {'logeuc','arith'}")
     else:
-        raise ValueError("aggregator.name must be one of {'logeuc','arith'}")
+        raise ValueError("target_type must be one of {'covariance','volatility'}")
 
     regime_model = RegimeModel(
         n_regimes=int(n_regimes),
@@ -153,6 +174,8 @@ def build_model(
         transition_estimator=str(transition_estimator),
         trans_smooth=float(trans_smooth),
         sample_stride=int(sample_stride),
+        knn_metric=str(knn_metric).lower(),
+        regime_aggregation=str(regime_aggregation).lower(),
     )
 
 
@@ -162,6 +185,7 @@ def build_model(
 def run_backtest(
     *,
     returns_df: pd.DataFrame,
+    target_type: str,
 
     # date range
     start_date: str | None,
@@ -221,10 +245,16 @@ def run_backtest(
     # mixing
     mix_lambda: float,
     shrink_gamma: float,
+    vol_dampen_toward_roll: float = 0.0,  # vol only: blend model toward rolling (0=off, 0.2=20% roll)
 
     # stability / floor
     floor_eps: float,
     apply_floor_to: str,
+
+    # design choices (for ablation)
+    knn_metric: str = "l2",
+    regime_aggregation: str = "soft",
+    regime_weighting: str = "filtered",  # "filtered" | "raw_pi"
 ) -> pd.DataFrame:
     if not isinstance(returns_df.index, pd.DatetimeIndex):
         raise ValueError("returns_df.index must be a DatetimeIndex.")
@@ -262,8 +292,11 @@ def run_backtest(
     model: RegimeAwareSimilarityForecaster | None = None
 
     rows: list[dict] = []
+    target_type = str(target_type).lower()
+    is_vol = target_type == "volatility"
+    use_filter = str(regime_weighting).lower() == "filtered"
 
-    # GMVP stability tracking per method
+    # GMVP stability tracking per method (covariance only)
     w_prev = {"model": None, "mix": None, "roll": None, "pers": None, "shrink": None}
 
     def _turnover(w_prev_i, w_now):
@@ -297,6 +330,7 @@ def run_backtest(
         if do_refit:
             train_df = df.iloc[: raw_anchor + 1]
             model = build_model(
+                target_type=target_type,
                 lookback=int(lookback),
                 horizon=int(horizon),
                 ddof=int(ddof),
@@ -316,6 +350,8 @@ def run_backtest(
                 verbose_skip=bool(verbose_skip),
                 aggregator_name=str(aggregator_name),
                 eps_spd=float(eps_spd),
+                knn_metric=str(knn_metric),
+                regime_aggregation=str(regime_aggregation),
             )
 
             if verbose:
@@ -354,14 +390,14 @@ def run_backtest(
             continue
 
         # ----------------------------
-        # (2) Predict covariance (model) and get regime assignments
+        # (2) Predict and get regime assignments
         # ----------------------------
         try:
-            Sigma_hat, alpha_t, pi_t = model.predict_at_raw_anchor(
+            pred_out = model.predict_at_raw_anchor(
                 past=past,
                 raw_anchor=raw_anchor,
                 k_neighbors=int(k_neighbors),
-                use_filter=True,
+                use_filter=use_filter,
                 neighbor_gap=int(neighbor_gap),
                 return_regime=True,
             )
@@ -370,24 +406,62 @@ def run_backtest(
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} prediction failed: {e}")
             continue
 
-        Sigma_hat = np.asarray(Sigma_hat, dtype=float)
+        if is_vol:
+            vol_hat, alpha_t, pi_t = pred_out[0], pred_out[1], pred_out[2]
+            vol_hat = np.asarray(vol_hat, dtype=float).reshape(-1)
+        else:
+            Sigma_hat, alpha_t, pi_t = pred_out[0], pred_out[1], pred_out[2]
+            Sigma_hat = np.asarray(Sigma_hat, dtype=float)
         K_regimes = alpha_t.size
         regime_assigned = int(np.argmax(alpha_t))
 
         # ----------------------------
-        # (3) Realized target covariance
+        # (3) Realized target
         # ----------------------------
         try:
-            Sigma_true = model.target_object.target(fut)
+            y_true = model.target_object.target(fut)
         except Exception as e:
             if verbose:
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} true target failed: {e}")
             continue
 
-        Sigma_true = np.asarray(Sigma_true, dtype=float)
+        y_true = np.asarray(y_true, dtype=float)
 
+        if is_vol:
+            vol_true = y_true.reshape(-1)
+            vol_roll = baseline_rolling_vol(past, ddof=int(ddof))
+            vol_pers = baseline_persistence_vol(R, raw_anchor=raw_anchor, horizon=int(horizon), ddof=int(ddof))
+            vol_shrink = baseline_shrink_vol(past, ddof=int(ddof), gamma=float(shrink_gamma))
+            # Dampen model forecast toward rolling to reduce overshooting (helps when kNN is noisy)
+            vol_dampen = float(vol_dampen_toward_roll)
+            vol_hat_use = (1.0 - vol_dampen) * vol_hat + vol_dampen * vol_roll
+            vol_mix = (1.0 - float(mix_lambda)) * vol_shrink + float(mix_lambda) * vol_hat_use
+            m_model = eval_vol_metrics(vol_hat_use, vol_true)
+            m_mix   = eval_vol_metrics(vol_mix, vol_true)
+            m_roll  = eval_vol_metrics(vol_roll, vol_true)
+            m_pers  = eval_vol_metrics(vol_pers, vol_true)
+            m_shrk  = eval_vol_metrics(vol_shrink, vol_true)
+            row = {
+                "date": anchor_date,
+                "raw_anchor": int(raw_anchor),
+                "mix_lambda": float(mix_lambda),
+                "shrink_gamma": float(shrink_gamma),
+                "regime_assigned": regime_assigned,
+            }
+            for k in range(K_regimes):
+                row[f"regime_prob_{k}"] = float(alpha_t[k])
+                row[f"regime_raw_{k}"] = float(pi_t[k])
+            row.update({f"model_{k}": v for k, v in m_model.items()})
+            row.update({f"mix_{k}":   v for k, v in m_mix.items()})
+            row.update({f"roll_{k}":  v for k, v in m_roll.items()})
+            row.update({f"pers_{k}":  v for k, v in m_pers.items()})
+            row.update({f"shrink_{k}": v for k, v in m_shrk.items()})
+            rows.append(row)
+            continue
+
+        Sigma_true = y_true
         # ----------------------------
-        # (4) Baselines (past-only)
+        # (4) Baselines (past-only) [covariance]
         # ----------------------------
         S_roll = baseline_rolling_cov(past, ddof=int(ddof))
         S_roll = project_to_spd((S_roll + S_roll.T) / 2.0, eps=1e-8)
@@ -513,39 +587,126 @@ def run_backtest(
 
     return pd.DataFrame(rows).set_index("date").sort_index()
 
-def build_report_table(results_df):
+def build_report_table(results_df: pd.DataFrame, target_type: str = "covariance") -> pd.DataFrame:
     rows = []
+    target_type = str(target_type).lower()
 
-    def add(section, metric, method, value):
+    def add(section: str, metric: str, method: str, value: float):
         rows.append({
             "section": section,
             "metric": metric,
             "method": method,
-            "value": float(value)
+            "value": float(value),
         })
 
     methods = ["model", "mix", "roll", "pers", "shrink"]
+
+    if target_type == "volatility":
+        for m in methods:
+            for key in ("vol_mse", "vol_mae", "vol_rmse"):
+                col = f"{m}_{key}"
+                if col in results_df.columns:
+                    add("vol_error_mean", key, m, results_df[col].mean())
+        return pd.DataFrame(rows)
 
     for m in methods:
         add("cov_error_mean", "fro", m, results_df[f"{m}_fro"].mean())
         add("cov_error_mean", "kl", m, results_df[f"{m}_kl"].mean())
         add("cov_error_mean", "stein", m, results_df[f"{m}_stein"].mean())
         add("cov_error_mean", "logeuc", m, results_df[f"{m}_logeuc"].mean())
-
         add("gmvp_mean", "gmvp_mean", m, results_df[f"{m}_gmvp_mean"].mean())
         add("gmvp_mean", "gmvp_var", m, results_df[f"{m}_gmvp_var"].mean())
         add("gmvp_mean", "gmvp_vol", m, results_df[f"{m}_gmvp_vol"].mean())
         add("gmvp_mean", "gmvp_sharpe", m, results_df[f"{m}_gmvp_sharpe"].mean())
         add("gmvp_mean", "turnover_l1", m, results_df[f"{m}_turnover_l1"].mean())
-
     return pd.DataFrame(rows)
+
+# ----------------------------
+# Config-driven entry (for ablation / programmatic use)
+# ----------------------------
+def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple[pd.DataFrame, str]:
+    """
+    Load data from config, run backtest, return (results_df, target_type).
+    Does not write files. Use for ablation or when you need the DataFrame in memory.
+    """
+    dcfg = cfg["data"]
+    mcfg = cfg["model"]
+    ecfg = cfg["embedder"]
+    acfg = cfg["aggregator"]
+    bcfg = cfg["backtest"]
+    vcfg = cfg["validation"]
+    icfg = cfg["internals"]
+    gcfg = cfg["guardrail"]
+    mixcfg = cfg["mixing"]
+    stcfg = cfg["stability"]
+    target_type = str(mcfg.get("target", "covariance")).lower()
+    verb = bcfg["verbose"] if verbose is None else verbose
+
+    returns_df = clean_returns_matrix_at_load(
+        parquet_path=dcfg["parquet_path"],
+        policy=dcfg["policy"],
+        q99_thresh=float(dcfg["q99_thresh"]),
+        max_thresh=float(dcfg["max_thresh"]),
+        min_non_nan_frac=float(dcfg["min_non_nan_frac"]),
+    ).T
+    returns_df.index = pd.to_datetime(returns_df.index)
+
+    results = run_backtest(
+        returns_df=returns_df,
+        target_type=target_type,
+        start_date=dcfg.get("start_date"),
+        end_date=dcfg.get("end_date"),
+        lookback=int(mcfg["lookback"]),
+        horizon=int(mcfg["horizon"]),
+        ddof=int(mcfg["ddof"]),
+        n_regimes=int(mcfg["n_regimes"]),
+        tau=float(mcfg["tau"]),
+        random_state=int(mcfg["random_state"]),
+        transition_estimator=str(mcfg["transition_estimator"]),
+        trans_smooth=float(mcfg["trans_smooth"]),
+        sample_stride=int(mcfg["sample_stride"]),
+        embedder_name=str(ecfg["name"]),
+        pca_k=int(ecfg["pca_k"]),
+        k_eigs=int(ecfg["k_eigs"]),
+        max_window_na_pct=float(ecfg["max_window_na_pct"]),
+        min_stocks_with_data_pct=float(ecfg["min_stocks_with_data_pct"]),
+        verbose_skip=bool(ecfg["verbose_skip"]),
+        aggregator_name=str(acfg["name"]),
+        eps_spd=float(acfg["eps_spd"]),
+        gmm_init_params=str(mcfg["gmm_init_params"]),
+        gmm_n_init=int(mcfg["gmm_n_init"]),
+        k_neighbors=int(bcfg["k_neighbors"]),
+        stride=int(bcfg["stride"]),
+        neighbor_gap=int(bcfg["neighbor_gap"]),
+        long_only=bool(bcfg["long_only"]),
+        verbose=bool(verb),
+        refit_mode=str(bcfg["refit_mode"]),
+        refit_every_days=int(bcfg["refit_every_days"]),
+        refit_every_steps=int(bcfg["refit_every_steps"]),
+        fut_max_na_pct=float(vcfg["fut_max_na_pct"]),
+        fut_min_stocks_pct=float(vcfg["fut_min_stocks_pct"]),
+        burn_in=int(icfg["burn_in"]),
+        min_samples_for_gmm=int(icfg["min_samples_for_gmm"]),
+        trace_ratio_lo=float(gcfg["trace_ratio_lo"]),
+        trace_ratio_hi=float(gcfg["trace_ratio_hi"]),
+        mix_lambda=float(mixcfg["mix_lambda"]),
+        shrink_gamma=float(mixcfg["shrink_gamma"]),
+        vol_dampen_toward_roll=float(mixcfg.get("vol_dampen_toward_roll", 0.0)),
+        floor_eps=float(stcfg["floor_eps"]),
+        apply_floor_to=str(stcfg["apply_floor_to"]),
+        knn_metric=str(mcfg.get("knn_metric", "l2")),
+        regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
+        regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
+    )
+    return results, target_type
+
 
 # ----------------------------
 # CLI
 # ----------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", type=str, default="configs/regime_similarity.yaml")
+    ap.add_argument("--config", type=str, default="configs/regime_covariance.yaml")
     ap.add_argument("--set", action="append", default=[], help="Override: section.key=value (repeatable)")
     args = ap.parse_args()
 
@@ -583,8 +744,11 @@ def main():
     mixcfg = cfg["mixing"]
     stcfg = cfg["stability"]
 
+    target_type = str(cfg.get("model", {}).get("target", "covariance")).lower()
+
     results = run_backtest(
         returns_df=returns_df,
+        target_type=target_type,
         start_date=dcfg.get("start_date"),
         end_date=dcfg.get("end_date"),
 
@@ -632,9 +796,12 @@ def main():
 
         mix_lambda=float(mixcfg["mix_lambda"]),
         shrink_gamma=float(mixcfg["shrink_gamma"]),
-
+        vol_dampen_toward_roll=float(mixcfg.get("vol_dampen_toward_roll", 0.0)),
         floor_eps=float(stcfg["floor_eps"]),
         apply_floor_to=str(stcfg["apply_floor_to"]),
+        knn_metric=str(mcfg.get("knn_metric", "l2")),
+        regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
+        regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
     )
 
     results.to_parquet(os.path.join(outdir, f"{tag}_backtest.parquet"))
@@ -651,8 +818,9 @@ def main():
     print(f"  {outdir}/{tag}_config_used.yaml")
     print("✓ Regime assignments saved to backtest results (columns: regime_assigned, regime_prob_*, regime_raw_*)")
 
-    report_df = build_report_table(results)
-    report_path = os.path.join(outdir, "regime_similarity_report.csv")
+    report_df = build_report_table(results, target_type=target_type)
+    report_name = "regime_volatility_report.csv" if target_type == "volatility" else "regime_covariance_report.csv"
+    report_path = os.path.join(outdir, report_name)
     report_df.to_csv(report_path, index=False)
     print(f"Saved report summary: {report_path}")
 

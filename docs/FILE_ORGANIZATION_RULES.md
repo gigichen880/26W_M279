@@ -64,7 +64,7 @@
 - ✅ README.md
 - ✅ requirements.txt
 - ✅ .gitignore
-- ✅ run_*.py (main entry points like run_regime_similarity.py)
+- ✅ run_*.py (main entry points like run_regime_covariance.py)
 
 ### Data files:
 - **Source data** → `data/raw/`
@@ -79,8 +79,8 @@
 - **Tests** → `tests/`
 
 ### Results:
-- **Figures** → `results/eda/figures/` (EDA); regime backtest figures → `results/figs_regime_similarity/`
-- **Reports** → `results/eda/reports/`; backtest report CSV and config snapshot → `results/` (e.g. `regime_similarity_report.csv`, `regime_similarity_config_used.yaml`)
+- **Figures** → `results/eda/figures/` (EDA); regime backtest figures → `results/figs_regime_covariance/`
+- **Reports** → `results/eda/reports/`; backtest report CSV and config snapshot → `results/` (e.g. `regime_covariance_report.csv`, `regime_covariance_config_used.yaml`)
 - **LaTeX** → `results/latex_tables/`
 
 ### Documentation:

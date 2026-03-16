@@ -1,6 +1,6 @@
 # Regime Similarity Backtest — Evaluation Analysis Summary
 
-This document summarizes the analysis of `results/regime_similarity_backtest.csv` (435 evaluation dates, 2013–2021) for the final report.
+This document summarizes the analysis of `results/regime_covariance_backtest.csv` (435 evaluation dates, 2013–2021) for the final report.
 
 ---
 
@@ -94,8 +94,8 @@ Mean Sharpe by year (RegimeSim vs Roll):
 - **Regime breakdown:** Not available in current backtest output.
 
 **4. Most important figures**  
-- **`results/figs_regime_similarity/equity_curves_gmvp.png`** — GMVP equity curves by method.  
-- **`results/figs_regime_similarity/skill_timeseries_ref_model.png`** — skill over time vs reference.
+- **`results/figs_regime_covariance/equity_curves_gmvp.png`** — GMVP equity curves by method.  
+- **`results/figs_regime_covariance/skill_timeseries_ref_model.png`** — skill over time vs reference.
 
 **5. Main takeaway**  
 - Regime-aware similarity forecasting delivers **higher GMVP Sharpe** than rolling and persistence baselines, with **better Frobenius error** and a **64.6% win rate** vs Roll. For the final report, highlight **Sharpe ratio** and **Frobenius error** (and optionally win rate); note the **turnover trade-off** and that **Mix/Shrink** are strong baselines on some covariance metrics (Stein/KL) and on turnover.

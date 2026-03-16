@@ -102,7 +102,7 @@ def main():
 
         fig.suptitle("K Ablation: Performance by Market Regime", fontsize=14, fontweight="bold", y=1.02)
         plt.tight_layout()
-        outpath = REPO_ROOT / "results/figs_regime_similarity/ablation_crisis_vs_normal.png"
+        outpath = REPO_ROOT / "results/figs_regime_covariance/ablation_crisis_vs_normal.png"
         outpath.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(outpath, dpi=300, bbox_inches="tight")
         plt.close()

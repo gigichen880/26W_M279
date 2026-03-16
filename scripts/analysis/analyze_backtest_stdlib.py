@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BACKTEST_CSV = REPO_ROOT / "results" / "regime_similarity_backtest.csv"
+BACKTEST_CSV = REPO_ROOT / "results" / "regime_covariance_backtest.csv"
 
 def mean_std(vals):
     n = len(vals)
@@ -188,8 +188,8 @@ KEY FINDINGS FOR FINAL REPORT:
    - Persistence baseline has negative Sharpe; roll and shrink are tougher. RegimeSim has higher turnover than Shrink/Mix.
 
 4. Most Important Figure:
-   - results/figs_regime_similarity/equity_curves_gmvp.png
-   - results/figs_regime_similarity/skill_timeseries_ref_model.png
+   - results/figs_regime_covariance/equity_curves_gmvp.png
+   - results/figs_regime_covariance/skill_timeseries_ref_model.png
 
 5. Main Takeaway:
    - Regime-aware similarity forecasting delivers higher GMVP Sharpe than rolling and persistence baselines; highlight Sharpe and covariance error (Frobenius/LogEuc) in the final report.

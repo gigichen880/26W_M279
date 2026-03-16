@@ -1,0 +1,16 @@
+section,metric,method,value
+vol_error_mean,vol_mse,model,0.7561552027071604
+vol_error_mean,vol_mae,model,0.4836265552820899
+vol_error_mean,vol_rmse,model,0.6353042151522689
+vol_error_mean,vol_mse,mix,0.2775353095918685
+vol_error_mean,vol_mae,mix,0.355639141739319
+vol_error_mean,vol_rmse,mix,0.4564293125995858
+vol_error_mean,vol_mse,roll,0.24584101182855228
+vol_error_mean,vol_mae,roll,0.3419549368865929
+vol_error_mean,vol_rmse,roll,0.44684071855118285
+vol_error_mean,vol_mse,pers,0.23557304166523424
+vol_error_mean,vol_mae,pers,0.35158912835884326
+vol_error_mean,vol_rmse,pers,0.45645005753790663
+vol_error_mean,vol_mse,shrink,0.24584101182855228
+vol_error_mean,vol_mae,shrink,0.3419549368865929
+vol_error_mean,vol_rmse,shrink,0.44684071855118285

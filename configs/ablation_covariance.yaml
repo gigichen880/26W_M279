@@ -1,0 +1,26 @@
+# Ablation over design choices for covariance forecasting.
+# One-at-a-time: for each axis, each choice is run; others at base config values.
+
+base_config: "regime_covariance.yaml"
+
+mode: one_at_a_time
+
+axes:
+  embedder:
+    key: embedder.name
+    choices: [pca, corr_eig]
+  transition_estimator:
+    key: model.transition_estimator
+    choices: [hard, soft]
+  knn_metric:
+    key: model.knn_metric
+    choices: [l2, l1]
+  regime_aggregation:
+    key: model.regime_aggregation
+    choices: [soft, hard]
+  regime_weighting:
+    key: model.regime_weighting
+    choices: [filtered, raw_pi]
+
+outputs:
+  outdir: "results/ablation_covariance"

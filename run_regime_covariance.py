@@ -1,6 +1,6 @@
-# run_regime_similarity.py
+# run_regime_covariance.py
 """
-Run regime-aware similarity forecasting on returns data.
+Run regime-aware similarity forecasting (covariance target) on returns data.
 Use cleaned data (extreme returns removed) by default — see data/DATA_QUALITY_ISSUES.md.
 """
 import pandas as pd

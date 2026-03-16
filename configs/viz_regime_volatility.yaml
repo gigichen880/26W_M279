@@ -1,0 +1,24 @@
+# Visualization for volatility backtest (regime_volatility_backtest.csv).
+# Same script as viz_regime_covariance; error and cumulative-advantage use vol_mse.
+
+inputs:
+  csv: "results/regime_volatility_backtest.csv"
+
+outputs:
+  outdir: "results/figs_regime_volatility/raw_temporal"
+  prefix: ""
+
+plot:
+  roll_window: 21
+  winroll_window: 63
+  methods: ["model", "mix", "roll", "shrink", "pers"]
+  reference_methods: ["model", "mix"]
+  overlay_metrics:
+    - vol_mse
+    - vol_mae
+    - vol_rmse
+  error_metric: "vol_mse"
+  cumulative_advantage_metric: "vol_mse"
+  heavy_pos_metrics: []
+  higher_is_better: []
+  calibration: false
