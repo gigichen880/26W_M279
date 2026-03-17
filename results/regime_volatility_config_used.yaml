@@ -20,7 +20,7 @@ model:
   ddof: 1
   sample_stride: 3
 embedder:
-  name: pca
+  name: vol_stats
   pca_k: 24
   k_eigs: 32
   max_window_na_pct: 0.3
@@ -30,7 +30,7 @@ aggregator:
   name: euclidean
   eps_spd: 1.0e-08
 backtest:
-  k_neighbors: 10
+  k_neighbors: 7
   stride: 5
   neighbor_gap: 10
   long_only: false
@@ -48,9 +48,9 @@ guardrail:
   trace_ratio_lo: 0.4
   trace_ratio_hi: 2.5
 mixing:
-  mix_lambda: 0.3
+  mix_lambda: 0.2
   shrink_gamma: 0.3
-  vol_dampen_toward_roll: 0.2
+  vol_dampen_toward_roll: 0.3
 stability:
   floor_eps: 0.0005
   apply_floor_to: gmvp_only

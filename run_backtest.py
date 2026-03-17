@@ -34,7 +34,7 @@ from similarity_forecast.backtests import (
     baseline_shrink_to_diag,
     baseline_rolling_vol,
     baseline_persistence_vol,
-    baseline_shrink_vol,
+    baseline_shrink_vol_toward_cs_mean,
     gmvp_weights,
     hold_period_portfolio_stats,
 )
@@ -431,7 +431,7 @@ def run_backtest(
             vol_true = y_true.reshape(-1)
             vol_roll = baseline_rolling_vol(past, ddof=int(ddof))
             vol_pers = baseline_persistence_vol(R, raw_anchor=raw_anchor, horizon=int(horizon), ddof=int(ddof))
-            vol_shrink = baseline_shrink_vol(past, ddof=int(ddof), gamma=float(shrink_gamma))
+            vol_shrink = baseline_shrink_vol_toward_cs_mean(past, ddof=int(ddof), gamma=float(shrink_gamma))
             # Dampen model forecast toward rolling to reduce overshooting (helps when kNN is noisy)
             vol_dampen = float(vol_dampen_toward_roll)
             vol_hat_use = (1.0 - vol_dampen) * vol_hat + vol_dampen * vol_roll

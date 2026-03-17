@@ -1,6 +1,6 @@
 # Realized volatility prediction: same pipeline as covariance, target = log realized vol per asset.
 # Reuses regimes, kNN, and walk-forward refit; aggregator is EuclideanMean (vector).
-# Embedder: "vol_stats" is recommended (past-window vol distribution); "pca" or "corr_eig" also work.
+# Embedder: "vol_stats" recommended (past-window vol distribution → similarity = similar vol regime).
 
 data:
   parquet_path: "data/processed/returns_universe_100.parquet"
@@ -26,7 +26,7 @@ model:
   sample_stride: 3
 
 embedder:
-  name: "pca" # vol distribution (mean + quantiles of log vol); use "pca" or "corr_eig" to match cov pipeline
+  name: "vol_stats"   # Past-window vol distribution (mean, quantiles, trend, concentration) for kNN
   pca_k: 24
   k_eigs: 32
   max_window_na_pct: 0.3
@@ -39,7 +39,7 @@ aggregator:
   eps_spd: 1.0e-8
 
 backtest:
-  k_neighbors: 10
+  k_neighbors: 7    # Fewer neighbors for vol to reduce noise; vol_stats embedding is more targeted
   stride: 5
   neighbor_gap: 10
   long_only: false
@@ -61,10 +61,10 @@ guardrail:
   trace_ratio_hi: 2.5
 
 mixing:
-  mix_lambda: 0.3
+  mix_lambda: 0.2   # Lower than cov: rely more on baseline until model is clearly better
   shrink_gamma: 0.3
-  # Pull model forecast toward rolling to reduce kNN noise (0=off; 0.2–0.3 often helps vol_mse)
-  vol_dampen_toward_roll: 0.2
+  # Pull model forecast toward rolling to reduce kNN noise (0.3 helps when embedder is vol_stats)
+  vol_dampen_toward_roll: 0.3
 
 stability:
   floor_eps: 5.0e-4

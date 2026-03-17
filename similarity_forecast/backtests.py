@@ -240,11 +240,23 @@ def baseline_persistence_vol(
 def baseline_shrink_vol(
     past: NDArray[np.floating], ddof: int = 1, gamma: float = 0.3, eps: float = 1e-12
 ) -> NDArray[np.floating]:
-    """Log vol from shrink-to-diag covariance of past window."""
+    """Log vol from shrink-to-diag covariance of past window (diag unchanged → same as rolling)."""
     S = cov_from_returns(past, ddof=ddof)
     S_shrink = baseline_shrink_to_diag(S, gamma=gamma)
     v = np.sqrt(np.maximum(np.diag(S_shrink), eps))
     return np.log(v).astype(float)
+
+
+def baseline_shrink_vol_toward_cs_mean(
+    past: NDArray[np.floating], ddof: int = 1, gamma: float = 0.3, eps: float = 1e-12
+) -> NDArray[np.floating]:
+    """
+    Vol-specific shrinkage: shrink each asset's log-vol toward cross-sectional mean log-vol.
+    (1 - gamma) * vol_roll + gamma * mean(vol_roll). Reduces cross-sectional dispersion.
+    """
+    vol_roll = realized_log_vol_from_returns(past, ddof=ddof, eps=eps)
+    cs_mean = float(np.nanmean(vol_roll))
+    return ((1.0 - gamma) * vol_roll + gamma * cs_mean).astype(float)
 
 
 def eval_vol_metrics(
