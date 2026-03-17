@@ -717,6 +717,9 @@ def main():
     outdir = cfg["outputs"]["outdir"]
     tag = cfg["outputs"]["tag"]
     os.makedirs(outdir, exist_ok=True)
+    # Canonical layout: results/<tag>/...
+    tag_dir = os.path.join(outdir, str(tag))
+    os.makedirs(tag_dir, exist_ok=True)
 
     # ----------------------------
     # Load returns panel
@@ -804,23 +807,23 @@ def main():
         regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
     )
 
-    results.to_parquet(os.path.join(outdir, f"{tag}_backtest.parquet"))
-    results.to_csv(os.path.join(outdir, f"{tag}_backtest.csv"))
+    # Write canonical files
+    results.to_parquet(os.path.join(tag_dir, "backtest.parquet"))
+    results.to_csv(os.path.join(tag_dir, "backtest.csv"))
 
     # dump resolved config used
     import yaml
-    with open(os.path.join(outdir, f"{tag}_config_used.yaml"), "w") as f:
+    with open(os.path.join(tag_dir, "config_used.yaml"), "w") as f:
         yaml.safe_dump(cfg, f, sort_keys=False)
 
     print("Saved:")
-    print(f"  {outdir}/{tag}_backtest.parquet")
-    print(f"  {outdir}/{tag}_backtest.csv")
-    print(f"  {outdir}/{tag}_config_used.yaml")
+    print(f"  {tag_dir}/backtest.parquet")
+    print(f"  {tag_dir}/backtest.csv")
+    print(f"  {tag_dir}/config_used.yaml")
     print("✓ Regime assignments saved to backtest results (columns: regime_assigned, regime_prob_*, regime_raw_*)")
 
     report_df = build_report_table(results, target_type=target_type)
-    report_name = "regime_volatility_report.csv" if target_type == "volatility" else "regime_covariance_report.csv"
-    report_path = os.path.join(outdir, report_name)
+    report_path = os.path.join(tag_dir, "report.csv")
     report_df.to_csv(report_path, index=False)
     print(f"Saved report summary: {report_path}")
 

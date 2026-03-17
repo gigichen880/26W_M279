@@ -2,10 +2,10 @@
 # Same script as viz_regime_covariance; error and cumulative-advantage use vol_mse.
 
 inputs:
-  csv: "results/regime_volatility_backtest.csv"
+  csv: "results/regime_volatility/backtest.csv"
 
 outputs:
-  outdir: "results/figs_regime_volatility/raw_temporal"
+  outdir: "results/regime_volatility/figs/raw_temporal"
   prefix: ""
 
 plot:

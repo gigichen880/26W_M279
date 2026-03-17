@@ -455,18 +455,18 @@ All regime scripts support **covariance** (default) and **volatility** via `--ta
 
 ```bash
 # Regime timeline, probability evolution, filtering effect (default: covariance)
-python scripts/analysis/visualize_regimes.py
-python scripts/analysis/visualize_regimes.py --target volatility
+python -m scripts.analysis.regime.visualize_regimes
+python -m scripts.analysis.regime.visualize_regimes --target volatility
 
 # Regime characterization table
-python scripts/analysis/regime_characterization.py --input results/regime_covariance_backtest.parquet
-python scripts/analysis/regime_characterization.py --input results/regime_volatility_backtest.parquet --target volatility
+python -m scripts.analysis.regime.regime_characterization --input results/regime_covariance/backtest.parquet
+python -m scripts.analysis.regime.regime_characterization --input results/regime_volatility/backtest.parquet --target volatility
 
 # Transition matrix heatmap
-python scripts/analysis/visualize_transition_matrix.py --target volatility
+python -m scripts.analysis.regime.visualize_transition_matrix --target volatility
 
 # Performance by regime
-python scripts/analysis/performance_by_regime.py --input results/regime_volatility_backtest.parquet --target volatility
+python -m scripts.analysis.regime.performance_by_regime --input results/regime_volatility/backtest.parquet --target volatility
 ```
 
 **Outputs (covariance):** `results/figs_regime_covariance/`, `results/regime_characterization.csv`, `results/transition_matrix.csv`  
@@ -480,12 +480,12 @@ Test model with different numbers of regimes (K=1,2,3,4,5,6). Works for **covari
 
 ```bash
 # Covariance (default): run ablation, then analyze
-python scripts/analysis/run_k_ablation.py --config configs/regime_covariance.yaml
-python scripts/analysis/analyze_k_ablation.py
+python -m scripts.analysis.ablation.run_k_ablation --config configs/regime_covariance.yaml
+python -m scripts.analysis.ablation.analyze_k_ablation
 
 # Volatility: use vol config and target
-python scripts/analysis/run_k_ablation.py --config configs/regime_volatility.yaml
-python scripts/analysis/analyze_k_ablation.py --ablation-dir results/ablation_k_regime_volatility --target volatility
+python -m scripts.analysis.ablation.run_k_ablation --config configs/regime_volatility.yaml
+python -m scripts.analysis.ablation.analyze_k_ablation --ablation-dir results/ablation_k_regime_volatility --target volatility
 ```
 
 **Outputs (cov):** `results/ablation_k/`, `results/ablation_k/ablation_k_comparison.csv`, `results/figs_regime_covariance/ablation_k_regimes.png` (4-panel)  
@@ -527,10 +527,10 @@ Compare model/mix vs baselines with paired t-tests (same script for covariance a
 
 ```bash
 # Covariance (default: regime_covariance backtest)
-python scripts/analysis/visualize_statistical_comparison.py
+python -m scripts.analysis.core.visualize_statistical_comparison
 
 # Volatility
-python scripts/analysis/visualize_statistical_comparison.py --input results/regime_volatility_backtest.parquet --target volatility
+python -m scripts.analysis.core.visualize_statistical_comparison --input results/regime_volatility/backtest.parquet --target volatility
 ```
 
 **Outputs:**
@@ -591,24 +591,28 @@ than main evaluation.
 To regenerate all results and figures from scratch:
 
 ```bash
+# One-command figures/tables (uses existing backtest outputs)
+python -m scripts.analysis.run_all --target covariance
+python -m scripts.analysis.run_all --target covariance --skip-ablation-figs
+
 # Main backtest
 python run_backtest.py --config configs/regime_covariance.yaml
 
 # Evaluative Metrics
-python -m scripts.analysis.visualize_backtest_results \
+python -m scripts.analysis.core.visualize_backtest_results \
   --config configs/viz_regime_covariance.yaml
 
 # Regime analysis
-python scripts/analysis/visualize_regimes.py
-python scripts/analysis/regime_characterization.py
-python scripts/analysis/visualize_transition_matrix.py
+python -m scripts.analysis.regime.visualize_regimes
+python -m scripts.analysis.regime.regime_characterization
+python -m scripts.analysis.regime.visualize_transition_matrix
 
 # K ablation
 python scripts/analysis/run_k_ablation.py
 python scripts/analysis/analyze_k_ablation.py
 
 # Statistical tests
-python scripts/analysis/visualize_statistical_comparison.py
+python -m scripts.analysis.core.visualize_statistical_comparison
 ```
 
 For **volatility**, run the same sequence using `configs/regime_volatility.yaml` and `configs/viz_regime_volatility.yaml`, and pass `--target volatility` (and `--input results/regime_volatility_backtest.parquet` where applicable) to regime and statistical-comparison scripts; use `--config configs/regime_volatility.yaml` for `run_k_ablation.py` and `--ablation-dir results/ablation_k_regime_volatility --target volatility` for `analyze_k_ablation.py`.

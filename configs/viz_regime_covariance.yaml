@@ -1,10 +1,10 @@
 # configs/viz_regime_covariance.yaml
 
 inputs:
-  csv: "results/regime_covariance_backtest.csv"
+  csv: "results/regime_covariance/backtest.csv"
 
 outputs:
-  outdir: "results/figs_regime_covariance/raw_temporal"
+  outdir: "results/regime_covariance/figs/raw_temporal"
   prefix: "" # optional filename prefix like "v1_" (leave "" for none)
 
 plot:
