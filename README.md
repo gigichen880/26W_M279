@@ -499,25 +499,25 @@ Isolate the effect of high-level design choices (embedder, distance, transition,
 
 ```bash
 # Covariance: embedder (pca, corr_eig), transition_estimator (hard, soft), knn_metric (l2, l1), regime_aggregation (soft, hard), regime_weighting (filtered, raw_pi)
-python -m scripts.analysis.run_ablation --config configs/ablation_covariance.yaml
+python -m scripts.analysis.ablation.run_ablation --config configs/ablation_covariance.yaml
 
 # Volatility: same axes; embedder choices include vol_stats
-python -m scripts.analysis.run_ablation --config configs/ablation_volatility.yaml
+python -m scripts.analysis.ablation.run_ablation --config configs/ablation_volatility.yaml
 ```
 
 **Outputs:**
 
-- `results/ablation_covariance/ablation_summary.csv` (or `ablation_volatility/`) — one row per axis/choice with primary metric mean (e.g. `model_fro`, `mix_fro` for cov; `model_vol_mse` for vol) and optional extra metrics.
+- `results/regime_covariance/ablation/ablation_summary.csv` (cov) or `results/regime_volatility/ablation/ablation_summary.csv` (vol) — one row per axis/choice with primary metric mean (e.g. `model_fro`, `mix_fro` for cov; `model_vol_mse` for vol) and optional extra metrics.
 
 **Axes:**
 
-| Axis | Choices | Description |
-|------|---------|-------------|
-| `embedder` | pca, corr_eig (vol: + vol_stats) | Window embedding for similarity |
-| `transition_estimator` | hard, soft | How transition matrix A is estimated |
-| `knn_metric` | l2, l1 | Neighbor distance (Euclidean vs Manhattan) |
-| `regime_aggregation` | soft, hard | Weights over regimes: α vs one-hot argmax(α) |
-| `regime_weighting` | filtered, raw_pi | Use filtered α vs raw GMM π |
+| Axis                   | Choices                          | Description                                  |
+| ---------------------- | -------------------------------- | -------------------------------------------- |
+| `embedder`             | pca, corr_eig (vol: + vol_stats) | Window embedding for similarity              |
+| `transition_estimator` | hard, soft                       | How transition matrix A is estimated         |
+| `knn_metric`           | l2, l1                           | Neighbor distance (Euclidean vs Manhattan)   |
+| `regime_aggregation`   | soft, hard                       | Weights over regimes: α vs one-hot argmax(α) |
+| `regime_weighting`     | filtered, raw_pi                 | Use filtered α vs raw GMM π                  |
 
 ---
 
@@ -537,7 +537,7 @@ python -m scripts.analysis.core.visualize_statistical_comparison --input results
 
 - `results/figs_regime_covariance/statistical_comparison/model_vs_baselines.png`, `mix_vs_baselines.png` (cov)
 - `results/figs_regime_volatility/statistical_comparison/model_vs_baselines.png`, `mix_vs_baselines.png` (vol)
-- Green = reference better than baseline; red = worse; ** / *** = significance at 5% / 1%
+- Green = reference better than baseline; red = worse; ** / \*** = significance at 5% / 1%
 
 ---
 
@@ -554,17 +554,17 @@ python -m scripts.analysis.case_study_neighbors \
   --k_neighbors 10
 ```
 
-This assumes the main backtest has already been run so that the corresponding backtest parquet exists (e.g. `results/regime_covariance_backtest.parquet`). For **volatility**, use `--config configs/regime_volatility.yaml` (requires `results/regime_volatility_backtest.parquet`).
+This assumes the main backtest has already been run so that the corresponding backtest exists (e.g. `results/regime_covariance/backtest.parquet`). For **volatility**, use `--config configs/regime_volatility.yaml` (uses `results/regime_volatility/backtest.parquet`). Outputs are written under the config’s tag.
 
-**Per-date outputs:**
+**Per-date outputs (under `results/<tag>/case_studies/`, with `<tag>` = `regime_covariance` or `regime_volatility`):**
 
-- `results/case_studies/neighbors_YYYYMMDD.csv`  
+- `neighbors_YYYYMMDD.csv`  
   Neighbor diagnostics: `neighbor_date`, `lag_days`, `dist_embedding`, kernel weight `kappa`,
   per-regime neighbor probabilities `pi_neighbor_regime_k`, regime-aware weights `W_regime_k`,
   and `total_weight` (overall contribution under the filtered regime mix).
-- `results/case_studies/neighbors_YYYYMMDD_weights_vs_date.png`  
+- `neighbors_YYYYMMDD_weights_vs_date.png`  
   Panel A — total neighbor weight vs `neighbor_date` (color = embedding distance).
-- `results/case_studies/neighbors_YYYYMMDD_on_regime_timeline.png`  
+- `neighbors_YYYYMMDD_on_regime_timeline.png`  
   Panel B — neighbors overlaid on a mini regime timeline, with point size ∝ weight and the
   anchor date shown as a dashed vertical line.
 

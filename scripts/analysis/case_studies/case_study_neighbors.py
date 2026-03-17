@@ -37,10 +37,7 @@ import matplotlib.pyplot as plt
 from scripts.config_utils import load_yaml, deep_update, parse_overrides
 from scripts.clean_data import clean_returns_matrix_at_load
 from run_backtest import build_model  # reuse core construction logic
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RESULTS_DIR = REPO_ROOT / "results"
+from scripts.analysis.utils.paths import RESULTS_DIR, resolve_backtest_path
 
 
 def _load_backtest_row(backtest_path: Path, date_str: str) -> pd.Series:
@@ -126,9 +123,7 @@ def _case_study_neighbors(cfg_path: str, date_str: str, k_neighbors: Optional[in
 
     # Backtest path from config tag (works for both covariance and volatility)
     tag = str(cfg.get("outputs", {}).get("tag", "regime_covariance"))
-    backtest_parquet = RESULTS_DIR / f"{tag}_backtest.parquet"
-    backtest_csv = RESULTS_DIR / f"{tag}_backtest.csv"
-    backtest_path = backtest_parquet if backtest_parquet.exists() else backtest_csv
+    backtest_path = resolve_backtest_path(tag)
     row = _load_backtest_row(backtest_path, date_str)
     raw_anchor = int(row["raw_anchor"])
     anchor_date = pd.to_datetime(row["date"])
@@ -203,7 +198,7 @@ def _case_study_neighbors(cfg_path: str, date_str: str, k_neighbors: Optional[in
         df_neighbors[f"pi_neighbor_regime_{k}"] = PI_neighbors[:, k]
         df_neighbors[f"W_regime_{k}"] = W[k, :]
 
-    out_dir = RESULTS_DIR / "case_studies"
+    out_dir = RESULTS_DIR / tag / "case_studies"
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_date = anchor_date.strftime("%Y%m%d")
     out_csv = out_dir / f"neighbors_{safe_date}.csv"
@@ -308,8 +303,10 @@ def main() -> None:
     overrides = parse_overrides(args.set)
     cfg = deep_update(cfg, overrides)
 
-    tmp_cfg_path = REPO_ROOT / "results" / "case_studies" / "tmp_case_cfg.yaml"
-    tmp_cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    tag = str(cfg.get("outputs", {}).get("tag", "regime_covariance"))
+    case_studies_dir = RESULTS_DIR / tag / "case_studies"
+    case_studies_dir.mkdir(parents=True, exist_ok=True)
+    tmp_cfg_path = case_studies_dir / "tmp_case_cfg.yaml"
     import yaml
 
     with open(tmp_cfg_path, "w") as f:

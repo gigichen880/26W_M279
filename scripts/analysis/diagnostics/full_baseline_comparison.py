@@ -16,8 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RESULTS_DIR = REPO_ROOT / "results"
+from scripts.analysis.utils.paths import RESULTS_DIR, resolve_backtest_path
 
 METHODS = ["model", "roll", "pers", "shrink", "mix"]
 METRICS_COV = {
@@ -165,24 +164,25 @@ def main():
         backtest_path = Path(args.input)
     else:
         if args.target == "volatility":
-            backtest_path = RESULTS_DIR / "regime_volatility_backtest.parquet"
-            if not backtest_path.exists():
-                backtest_path = RESULTS_DIR / "regime_volatility_backtest.csv"
+            backtest_path = resolve_backtest_path("regime_volatility")
+        elif args.target == "covariance":
+            backtest_path = resolve_backtest_path("regime_covariance")
         else:
-            backtest_path = RESULTS_DIR / "regime_covariance_backtest.parquet"
+            backtest_path = resolve_backtest_path("regime_covariance")
             if not backtest_path.exists():
-                backtest_path = RESULTS_DIR / "regime_covariance_backtest.csv"
-        if backtest_path.exists() and args.target == "auto":
-            is_vol = "volatility" in str(backtest_path)
+                backtest_path = resolve_backtest_path("regime_volatility")
+            if backtest_path.exists():
+                is_vol = "regime_volatility" in str(backtest_path)
     if not backtest_path.exists():
         print(f"Backtest not found: {backtest_path}")
         print("Run: python run_backtest.py --config configs/regime_covariance.yaml (or configs/regime_volatility.yaml)")
         return
 
     results_df = create_comparison_table(backtest_path, is_vol=is_vol)
-    out_name = "comprehensive_baseline_comparison_volatility.csv" if is_vol else "comprehensive_baseline_comparison.csv"
-    out_csv = RESULTS_DIR / out_name
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    tag = "regime_volatility" if is_vol else "regime_covariance"
+    out_dir = RESULTS_DIR / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = out_dir / "comprehensive_baseline_comparison.csv"
     results_df.to_csv(out_csv, index=False)
     print_comparison_table(results_df, is_vol=is_vol)
     print(f"✓ Saved to {out_csv}\n")

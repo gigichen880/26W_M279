@@ -23,6 +23,11 @@ Move each experiment into a single folder:
 - `results/<tag>/figs/raw_temporal/`
 - `results/<tag>/figs/statistical_comparison/`
 - `results/<tag>/figs/regime/`
+- `results/<tag>/comprehensive_baseline_comparison.csv` (from full_baseline_comparison script)
+- `results/<tag>/case_studies/` — neighbor case-study CSVs and figures (from case_study_neighbors; tag from config).
+- `results/<tag>/ablation/` — design-ablation summary and config (from run_ablation; tag from base config).
+
+**Note:** Statistical comparison outputs are figures only (under `figs/statistical_comparison/`). The old flat `results/statistical_comparison.csv` and `results/comprehensive_baseline_comparison.csv` are no longer used; comparison tables are written into the tag folder when generated.
 
 If you want this, we can implement it **without breaking existing paths** by:
 1) Writing new outputs into `results/<tag>/...`, and
