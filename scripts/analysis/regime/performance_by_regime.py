@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.analysis.utils.paths import resolve_backtest_path, resolve_figs_dir
+from scripts.analysis.utils import resolve_backtest_path, resolve_figs_dir
 
 
 def _detect_target(df: pd.DataFrame) -> str:

@@ -8,7 +8,7 @@ data:
   end_date: "2021-12-31"
 
 model:
-  target: "covariance"   # "covariance" | "volatility"
+  target: "covariance" # "covariance" | "volatility"
   lookback: 50
   horizon: 20
 
@@ -16,7 +16,7 @@ model:
   n_regimes: 4
   tau: 2.0
   random_state: 0
-  transition_estimator: "soft"     # "hard" or "soft"
+  transition_estimator: "soft" # "hard" or "soft"
   trans_smooth: 10.0
   gmm_init_params: "random"
   gmm_n_init: 10
@@ -28,7 +28,7 @@ model:
   sample_stride: 3
 
 embedder:
-  name: "pca"                      # "pca" or "corr_eig"
+  name: "pca" # "pca" or "corr_eig"
 
   # PCA embedder params
   pca_k: 24
@@ -42,21 +42,21 @@ embedder:
   verbose_skip: false
 
 aggregator:
-  name: "logeuc"                   # "logeuc" or "arith"
+  name: "logeuc" # "logeuc" or "arith"
   eps_spd: 1.0e-8
 
 backtest:
   k_neighbors: 10
-  stride: 5                        # evaluation stride in raw_anchor units
-  neighbor_gap: 10                  # disallow near-duplicate neighbors
+  stride: 5 # evaluation stride in raw_anchor units
+  neighbor_gap: 10 # disallow near-duplicate neighbors
 
   long_only: false
   verbose: true
 
   # refit control
-  refit_mode: "days"               # "days" or "steps"
-  refit_every_days: 20             # used when refit_mode="days"
-  refit_every_steps: 20            # used when refit_mode="steps"
+  refit_mode: "days" # "days" or "steps"
+  refit_every_days: 20 # used when refit_mode="days"
+  refit_every_steps: 20 # used when refit_mode="steps"
 
 validation:
   # validation of FUTURE window (evaluation hold-out)
@@ -68,16 +68,16 @@ internals:
   min_samples_for_gmm: 50
 
 guardrail:
-  trace_ratio_lo: 0.4
-  trace_ratio_hi: 2.5
+  trace_ratio_lo: 0.6 # tighter (e.g. 0.6) → model uses shrink more often → lower gmvp_vol
+  trace_ratio_hi: 2.0 # tighter (e.g. 2.0) → same
 
 mixing:
-  mix_lambda: 0.3                   # S_mix = (1-lam) S_shrink + lam S_model
-  shrink_gamma: 0.3                 # baseline_shrink_to_diag gamma
+  mix_lambda: 0.3 # S_mix = (1-lam) S_shrink + lam S_model
+  shrink_gamma: 0.3 # baseline_shrink_to_diag gamma
 
 stability:
-  floor_eps: 5.0e-4                # diagonal ridge (return^2)
-  apply_floor_to: "gmvp_only"      # "all" or "gmvp_only"
+  floor_eps: 1.0e-3 # diagonal ridge (return^2); larger (e.g. 1e-3) → less extreme GMVP weights → often lower gmvp_vol
+  apply_floor_to: "gmvp_only" # "all" or "gmvp_only"
 
 outputs:
   outdir: "results"

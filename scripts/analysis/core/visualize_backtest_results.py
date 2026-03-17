@@ -45,6 +45,7 @@ def _metric_cols(df: pd.DataFrame, metric: str, methods: List[str]):
 
 
 def plot_equity_curves(df, outdir, methods):
+    """Single-panel plot: GMVP cumulative wealth for all methods."""
     cols = _metric_cols(df, "gmvp_cumret", methods)
     if not cols:
         return
@@ -54,6 +55,7 @@ def plot_equity_curves(df, outdir, methods):
         eq = np.cumprod(1 + r)
         plt.plot(eq.index, eq.values, label=m)
     plt.title("GMVP Equity Curves")
+    plt.ylabel("Cumulative wealth")
     plt.legend()
     plt.grid(alpha=0.3)
     _savefig(os.path.join(outdir, "equity_curves_gmvp.png"))
@@ -93,7 +95,7 @@ def plot_rolling_median(df, outdir, methods, metrics, window):
     _savefig(os.path.join(outdir, f"rolling_median_{window}d.png"))
 
 
-def plot_gmvp_sharpe(df, outdir, methods):
+def plot_gmvp_sharpe(df, outdir, methods, roll_window: int = 21):
     cols = _metric_cols(df, "gmvp_sharpe", methods)
     if not cols:
         return
@@ -110,8 +112,11 @@ def plot_gmvp_sharpe(df, outdir, methods):
         q1, q99 = -1.0, 1.0
     plt.figure(figsize=(12, 4))
     for m, c in cols.items():
-        plt.plot(df[c], label=m, alpha=0.9 if m in {"model", "mix"} else 0.6)
-    plt.title("GMVP Sharpe over time")
+        s = pd.to_numeric(df[c], errors="coerce")
+        plt.plot(s.index, s.values, alpha=0.35, linewidth=0.8)
+        r = s.rolling(roll_window, min_periods=1).mean()
+        plt.plot(r.index, r.values, label=m, alpha=0.95, linewidth=1.2)
+    plt.title("GMVP Sharpe over time (thick line = 21d rolling mean)")
     plt.ylabel("Sharpe")
     plt.grid(alpha=0.3)
     plt.legend()
@@ -119,14 +124,17 @@ def plot_gmvp_sharpe(df, outdir, methods):
     _savefig(os.path.join(outdir, "gmvp_sharpe_timeseries.png"))
 
 
-def plot_turnover_l1(df, outdir, methods):
+def plot_turnover_l1(df, outdir, methods, roll_window: int = 21):
     cols = _metric_cols(df, "turnover_l1", methods)
     if not cols:
         return
     plt.figure(figsize=(12, 4))
     for m, c in cols.items():
-        plt.plot(df[c], label=m, alpha=0.9 if m in {"model", "mix"} else 0.6)
-    plt.title("GMVP turnover (L1) over time")
+        s = pd.to_numeric(df[c], errors="coerce")
+        plt.plot(s.index, s.values, alpha=0.35, linewidth=0.8)
+        r = s.rolling(roll_window, min_periods=1).mean()
+        plt.plot(r.index, r.values, label=m, alpha=0.95, linewidth=1.2)
+    plt.title("GMVP turnover (L1) over time (thick line = 21d rolling mean)")
     plt.ylabel("turnover L1")
     plt.grid(alpha=0.3)
     plt.legend()
@@ -151,7 +159,13 @@ def plot_covariance_error_timeseries(df, outdir, methods, error_metric: str = "f
     _savefig(os.path.join(outdir, f"covariance_error_{error_metric}_timeseries.png"))
 
 
-def plot_cumulative_advantage(df, outdir, ref: str, methods: List[str], metric: str = "fro"):
+def plot_cumulative_advantage(
+    df, outdir, ref: str, methods: List[str], metric: str = "fro", *, higher_is_better: bool = False
+):
+    """
+    Cumulative advantage: cumsum of (ref - baseline) when higher_is_better else (baseline - ref).
+    Positive curve = reference is better than that baseline on average over time.
+    """
     ref_col = f"{ref}_{metric}"
     if ref_col not in df.columns:
         return
@@ -163,7 +177,7 @@ def plot_cumulative_advantage(df, outdir, ref: str, methods: List[str], metric: 
         if c not in df.columns:
             continue
         base_s = pd.to_numeric(df[c], errors="coerce")
-        diff = base_s - ref_s
+        diff = (ref_s - base_s) if higher_is_better else (base_s - ref_s)
         cum = diff.cumsum()
         plt.plot(cum.index, cum.values, label=f"{ref} vs {m}")
     plt.axhline(0, color="black", linestyle="--", alpha=0.7)
@@ -196,8 +210,8 @@ def main():
     plot_equity_curves(df, outdir, methods)
     plot_method_overlays(df, outdir, methods, metrics)
     plot_rolling_median(df, outdir, methods, metrics, roll_window)
-    plot_gmvp_sharpe(df, outdir, methods)
-    plot_turnover_l1(df, outdir, methods)
+    plot_gmvp_sharpe(df, outdir, methods, roll_window=roll_window)
+    plot_turnover_l1(df, outdir, methods, roll_window=roll_window)
 
     error_metric = cfg["plot"].get("error_metric", "fro")
     plot_covariance_error_timeseries(df, outdir, methods, error_metric=error_metric)
@@ -206,6 +220,23 @@ def main():
     for ref in ("model", "mix"):
         if ref in methods:
             plot_cumulative_advantage(df, outdir, ref=ref, methods=methods, metric=cum_metric)
+
+    # Cumulative return advantage: model vs baselines, mix vs baselines (separate files, same style as other cum-adv)
+    if _metric_cols(df, "gmvp_cumret", methods):
+        for ref in ("model", "mix"):
+            if ref in methods:
+                plot_cumulative_advantage(
+                    df, outdir, ref=ref, methods=methods, metric="gmvp_cumret", higher_is_better=True
+                )
+
+    # Cumulative advantage for GMVP and turnover (easier to read than raw daily series)
+    for metric, higher in [("gmvp_sharpe", True), ("gmvp_vol", False), ("turnover_l1", False)]:
+        if _metric_cols(df, metric, methods):
+            for ref in ("model", "mix"):
+                if ref in methods:
+                    plot_cumulative_advantage(
+                        df, outdir, ref=ref, methods=methods, metric=metric, higher_is_better=higher
+                    )
 
     print("\nSaved figures:")
     for f in SAVED_FILES:
