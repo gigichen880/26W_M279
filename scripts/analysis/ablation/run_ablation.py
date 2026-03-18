@@ -1,9 +1,14 @@
-# scripts/analysis/run_ablation.py
+# scripts/analysis/ablation/run_ablation.py
 """
 Systematic ablation over high-level design choices in the similarity_forecast pipeline.
 
-Evaluates one axis at a time: for each choice, runs the backtest and records summary
-metrics (primary metric mean for model/mix). Use to isolate the effect of:
+Evaluates design choices either:
+  - one axis at a time (ablation): isolate the effect of a single knob, OR
+  - full grid (grid mode): search for the best combined set of decisions.
+
+Records summary metrics (primary metric mean for model/mix and GMVP metrics for covariance).
+
+Use to isolate or tune:
   - embedder (pca, corr_eig, vol_stats for vol)
   - transition_estimator (hard vs soft)
   - knn_metric (l2 vs l1)
@@ -11,8 +16,8 @@ metrics (primary metric mean for model/mix). Use to isolate the effect of:
   - regime_weighting (filtered vs raw_pi)
 
 Usage:
-  python -m scripts.analysis.run_ablation --config configs/ablation_covariance.yaml
-  python -m scripts.analysis.run_ablation --config configs/ablation_volatility.yaml
+  python -m scripts.analysis.ablation.run_ablation --config configs/ablation_covariance.yaml
+  python -m scripts.analysis.ablation.run_ablation --config configs/ablation_volatility.yaml
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from __future__ import annotations
 import os
 import argparse
 import copy
+import itertools
 from typing import Any, Literal
 
 import numpy as np
@@ -74,6 +80,10 @@ def run_ablation(
             os.path.join(os.path.dirname(os.path.abspath(cfg_path)), base_path)
         )
     base_cfg = load_yaml(base_path)
+    # Optional: apply config overrides (e.g., shorten date range for speed)
+    overrides_cfg = cfg.get("overrides")
+    if isinstance(overrides_cfg, dict) and overrides_cfg:
+        base_cfg = deep_update(base_cfg, overrides_cfg)
     axes_cfg = cfg["axes"]
     mode = str(cfg.get("mode", "one_at_a_time")).lower()
     tag = str(base_cfg.get("outputs", {}).get("tag", "regime_covariance"))
@@ -90,74 +100,128 @@ def run_ablation(
         extra_metrics = ["stein", "logeuc"]
         gmvp_metrics = ["gmvp_sharpe", "gmvp_var", "gmvp_vol", "turnover_l1"]
 
+    # Ranking objective (for grid mode)
+    # Example: "model_gmvp_sharpe_mean" or "mix_gmvp_sharpe_mean"
+    default_objective = "model_gmvp_sharpe_mean" if target_type != "volatility" else "model_vol_mse_mean"
+    objective = str(cfg.get("objective", default_objective))
+
     rows: list[dict] = []
     runs_dir = os.path.join(out_dir, "runs")
     os.makedirs(runs_dir, exist_ok=True)
 
-    for axis_name, axis_spec in axes_cfg.items():
-        key_path = axis_spec["key"]
-        choices = list(axis_spec["choices"])
-        base_value = _get_dotted(base_cfg, key_path)
-        if base_value is not None and isinstance(base_value, str):
-            base_value = base_value.lower()
+    def _summarize_run(results_df: pd.DataFrame) -> dict:
+        model_col = f"model_{primary_metric}"
+        mix_col = f"mix_{primary_metric}"
+        out = {
+            "primary_metric": primary_metric,
+            "model_mean": float(results_df[model_col].mean()) if model_col in results_df.columns else None,
+            "mix_mean": float(results_df[mix_col].mean()) if mix_col in results_df.columns else None,
+        }
+        for m in extra_metrics:
+            for pref in ("model", "mix"):
+                c = f"{pref}_{m}"
+                if c in results_df.columns:
+                    out[c + "_mean"] = float(pd.to_numeric(results_df[c], errors="coerce").mean())
+        for m in gmvp_metrics:
+            for pref in ("model", "mix", "roll", "pers", "shrink"):
+                c = f"{pref}_{m}"
+                if c in results_df.columns:
+                    out[c + "_mean"] = float(pd.to_numeric(results_df[c], errors="coerce").mean())
+        return out
 
-        for choice in choices:
-            choice_str = str(choice).lower() if isinstance(choice, str) else choice
-            merged = deep_update(copy.deepcopy(base_cfg), _set_dotted({}, key_path, choice))
-            run_tag = f"{axis_name}={choice_str}"
-            print(f"  Running ablation: {run_tag} ...")
+    if mode in {"grid", "full_grid"}:
+        axis_items = list(axes_cfg.items())
+        axis_names = [a for a, _ in axis_items]
+        choices_lists = [list(spec["choices"]) for _, spec in axis_items]
+        keys = [spec["key"] for _, spec in axis_items]
+        total = int(np.prod([len(c) for c in choices_lists])) if choices_lists else 0
+        print(f"Running GRID over {len(axis_names)} axes ({total} combinations). Objective={objective}")
+
+        for combo in itertools.product(*choices_lists):
+            merged = copy.deepcopy(base_cfg)
+            tags = []
+            combo_dict = {}
+            for axis_name, key_path, choice in zip(axis_names, keys, combo):
+                choice_str = str(choice).lower() if isinstance(choice, str) else str(choice)
+                combo_dict[axis_name] = choice_str
+                tags.append(f"{axis_name}={choice_str}")
+                merged = deep_update(merged, _set_dotted({}, key_path, choice))
+            run_tag = "|".join(tags)
+            print(f"  Running grid: {run_tag} ...")
             try:
                 results_df, _ = run_backtest_from_config(merged, verbose=verbose)
             except Exception as e:
                 print(f"    Failed: {e}")
-                rows.append({
-                    "axis": axis_name,
-                    "choice": choice_str,
-                    "primary_metric": primary_metric,
-                    "model_mean": None,
-                    "mix_mean": None,
-                    "run_tag": run_tag,
-                    "error": str(e),
-                })
+                row = {"mode": "grid", "run_tag": run_tag, "error": str(e)}
+                row.update(combo_dict)
+                rows.append(row)
                 continue
 
-            # Persist time series so we can visualize later (and avoid reruns)
-            axis_dir = os.path.join(runs_dir, axis_name)
-            os.makedirs(axis_dir, exist_ok=True)
-            run_base = os.path.join(axis_dir, f"{choice_str}")
+            grid_dir = os.path.join(runs_dir, "__grid__")
+            os.makedirs(grid_dir, exist_ok=True)
+            safe_name = run_tag.replace("/", "_").replace(":", "_")
+            run_base = os.path.join(grid_dir, safe_name)
             try:
                 results_df.to_parquet(run_base + ".parquet")
             except Exception:
-                # Fallback: always ensure we save something readable.
                 results_df.to_csv(run_base + ".csv", index=True)
 
-            model_col = f"model_{primary_metric}"
-            mix_col = f"mix_{primary_metric}"
-            model_mean = float(results_df[model_col].mean()) if model_col in results_df.columns else None
-            mix_mean = float(results_df[mix_col].mean()) if mix_col in results_df.columns else None
-
-            row = {
-                "axis": axis_name,
-                "choice": choice_str,
-                "primary_metric": primary_metric,
-                "model_mean": model_mean,
-                "mix_mean": mix_mean,
-                "run_tag": run_tag,
-            }
-            for m in extra_metrics:
-                for pref in ("model", "mix"):
-                    c = f"{pref}_{m}"
-                    if c in results_df.columns:
-                        row[c + "_mean"] = float(results_df[c].mean())
-            # Covariance-only: also record GMVP-related means (and preserve time series in parquet above)
-            for m in gmvp_metrics:
-                for pref in ("model", "mix", "roll", "pers", "shrink"):
-                    c = f"{pref}_{m}"
-                    if c in results_df.columns:
-                        row[c + "_mean"] = float(pd.to_numeric(results_df[c], errors="coerce").mean())
+            row = {"mode": "grid", "run_tag": run_tag}
+            row.update(combo_dict)
+            row.update(_summarize_run(results_df))
             rows.append(row)
+    else:
+        # One-at-a-time ablation
+        for axis_name, axis_spec in axes_cfg.items():
+            key_path = axis_spec["key"]
+            choices = list(axis_spec["choices"])
+            for choice in choices:
+                choice_str = str(choice).lower() if isinstance(choice, str) else str(choice)
+                merged = deep_update(copy.deepcopy(base_cfg), _set_dotted({}, key_path, choice))
+                run_tag = f"{axis_name}={choice_str}"
+                print(f"  Running ablation: {run_tag} ...")
+                try:
+                    results_df, _ = run_backtest_from_config(merged, verbose=verbose)
+                except Exception as e:
+                    print(f"    Failed: {e}")
+                    rows.append({
+                        "mode": "one_at_a_time",
+                        "axis": axis_name,
+                        "choice": choice_str,
+                        "primary_metric": primary_metric,
+                        "model_mean": None,
+                        "mix_mean": None,
+                        "run_tag": run_tag,
+                        "error": str(e),
+                    })
+                    continue
+
+                # Persist time series so we can visualize later (and avoid reruns)
+                axis_dir = os.path.join(runs_dir, axis_name)
+                os.makedirs(axis_dir, exist_ok=True)
+                run_base = os.path.join(axis_dir, f"{choice_str}")
+                try:
+                    results_df.to_parquet(run_base + ".parquet")
+                except Exception:
+                    results_df.to_csv(run_base + ".csv", index=True)
+
+                row = {
+                    "mode": "one_at_a_time",
+                    "axis": axis_name,
+                    "choice": choice_str,
+                    "run_tag": run_tag,
+                }
+                row.update(_summarize_run(results_df))
+                rows.append(row)
 
     summary = pd.DataFrame(rows)
+
+    # Rank grid runs by objective if present
+    if mode in {"grid", "full_grid"} and (objective in summary.columns):
+        obj = pd.to_numeric(summary[objective], errors="coerce")
+        higher_is_better = "sharpe" in objective.lower() or "r2" in objective.lower() or "mean" in objective.lower() and "vol_mse" not in objective.lower()
+        summary["_objective"] = obj
+        summary = summary.sort_values("_objective", ascending=not higher_is_better, na_position="last")
 
     csv_path = os.path.join(out_dir, "ablation_summary.csv")
     summary.to_csv(csv_path, index=False)
@@ -180,6 +244,76 @@ def run_ablation(
     except Exception:
         print("(matplotlib not available; skipping ablation plots.)")
         return summary
+
+    def _plot_axis_pairwise_bars(
+        *,
+        sub: pd.DataFrame,
+        axis_name: str,
+        outpath: str,
+        target_type: str,
+    ) -> None:
+        """
+        One figure per axis:
+          - multiple subplots (key metrics)
+          - grouped bars for model vs mix for each choice
+          - for GMVP Sharpe, add horizontal lines for roll/shrink/pers baselines
+        """
+        if sub.empty:
+            return
+        sub = sub.copy()
+        sub = sub.sort_values("choice")
+        labels = sub["choice"].astype(str).tolist()
+        x = np.arange(len(labels))
+        w = 0.35
+
+        if target_type == "volatility":
+            panels = [
+                ("model_mean", "mix_mean", f"Mean {primary_metric} (↓)"),
+            ]
+        else:
+            panels = [
+                ("model_gmvp_sharpe_mean", "mix_gmvp_sharpe_mean", "Mean GMVP Sharpe (↑)"),
+                ("model_turnover_l1_mean", "mix_turnover_l1_mean", "Mean Turnover L1 (↓)"),
+                ("model_mean", "mix_mean", f"Mean {primary_metric} (↓)"),
+                ("model_stein_mean", "mix_stein_mean", "Mean Stein (↓)"),
+            ]
+
+        n = len(panels)
+        fig, axs = plt.subplots(1, n, figsize=(4.2 * n, 3.6), sharex=False)
+        if n == 1:
+            axs = [axs]
+
+        for ax, (c_model, c_mix, title) in zip(axs, panels):
+            if c_model not in sub.columns or c_mix not in sub.columns:
+                ax.set_visible(False)
+                continue
+            y_model = pd.to_numeric(sub[c_model], errors="coerce").values
+            y_mix = pd.to_numeric(sub[c_mix], errors="coerce").values
+            ax.bar(x - w / 2, y_model, w, label="model", color="steelblue", alpha=0.9)
+            ax.bar(x + w / 2, y_mix, w, label="mix", color="gray", alpha=0.7)
+            ax.set_title(title, fontsize=10, fontweight="bold")
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=9)
+            ax.grid(alpha=0.25, axis="y")
+            # Baseline reference lines for GMVP Sharpe (constant across one-at-a-time runs)
+            if c_model.endswith("gmvp_sharpe_mean"):
+                for b, col, ls, colr in [
+                    ("roll", "roll_gmvp_sharpe_mean", "--", "#8e8e8e"),
+                    ("shrink", "shrink_gmvp_sharpe_mean", "--", "#6d6d6d"),
+                    ("pers", "pers_gmvp_sharpe_mean", "--", "#3a3a3a"),
+                ]:
+                    if col in sub.columns:
+                        yb = float(pd.to_numeric(sub[col], errors="coerce").iloc[0])
+                        if np.isfinite(yb):
+                            ax.axhline(yb, linestyle=ls, linewidth=1.0, color=colr, alpha=0.9, label=b)
+
+        handles, labels_leg = axs[0].get_legend_handles_labels()
+        fig.legend(handles, labels_leg, loc="upper center", ncol=5, fontsize=9, bbox_to_anchor=(0.5, 1.02))
+        fig.suptitle(f"Ablation axis: {axis_name} (grouped bars; model vs mix)", y=1.10, fontsize=12, fontweight="bold")
+        fig.tight_layout()
+        os.makedirs(os.path.dirname(outpath), exist_ok=True)
+        fig.savefig(outpath, dpi=220, bbox_inches="tight")
+        plt.close(fig)
 
     if plots in {"summary", "all"}:
         # Plot: summary bars by axis/choice
@@ -208,6 +342,18 @@ def run_ablation(
             plt.close(fig)
         except Exception as e:
             print(f"(warn) Failed to plot ablation summary: {e}")
+
+        # Plot: one figure per axis with multiple key metrics (pairwise decision comparisons)
+        try:
+            if "axis" in summary.columns and "choice" in summary.columns:
+                for axis_name in sorted([a for a in summary["axis"].dropna().unique().tolist()]):
+                    sub = summary[(summary.get("mode") == "one_at_a_time") & (summary["axis"] == axis_name)].copy()
+                    if sub.empty:
+                        continue
+                    outpath = os.path.join(figs_dir, f"axis_pairwise_bars_{axis_name}.png")
+                    _plot_axis_pairwise_bars(sub=sub, axis_name=axis_name, outpath=outpath, target_type=target_type)
+        except Exception as e:
+            print(f"(warn) Failed to plot axis pairwise bars: {e}")
 
     # Plot: per-axis time series for key metrics using saved parquet/csv
     def _load_run_df(pbase: str) -> pd.DataFrame:

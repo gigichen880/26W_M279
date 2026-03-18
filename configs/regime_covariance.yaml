@@ -28,8 +28,8 @@ model:
   sample_stride: 3
 
   # Pipeline stability: lower GMVP variance with minimal Sharpe drop. No blend with roll/shrink (see docs/MODEL_VS_MIX_DESIGN.md).
-  output_shrink_toward_diag: 0.12   # reduced from 0.18 so model is more distinct from shrink → better model vs shrink
-  alpha_smooth_frac: 0.08          # smooth regime alpha to reduce variance spikes
+  output_shrink_toward_diag: 0.12 # reduced from 0.18 so model is more distinct from shrink → better model vs shrink
+  alpha_smooth_frac: 0.08 # smooth regime alpha to reduce variance spikes
 
 embedder:
   name: "pca" # "pca" or "corr_eig"
@@ -50,7 +50,7 @@ aggregator:
   eps_spd: 1.0e-8
 
 backtest:
-  k_neighbors: 10
+  k_neighbors: 30
   stride: 5 # evaluation stride in raw_anchor units
   neighbor_gap: 10 # disallow near-duplicate neighbors
 
@@ -72,8 +72,9 @@ internals:
   min_samples_for_gmm: 50
 
 guardrail:
-  trace_ratio_lo: 0.5  # relaxed so model is used more often (was 0.6) → better model vs shrink on GMVP
-  trace_ratio_hi: 2.5  # relaxed (was 2.0)
+  trace_ratio_lo: 0.5 # relaxed so model is used more often (was 0.6) → better model vs shrink on GMVP
+  trace_ratio_hi: 2.5 # relaxed (was 2.0)
+  mode: "invalid_only" # "invalid_only" (recommended) | "ratio_or_invalid"
 
 mixing:
   # Mixing for the "mix" method (covariance). Slightly more shrink → lower variance, small Sharpe cost.
@@ -85,8 +86,11 @@ mixing:
   shrink_gamma: 0.3 # baseline_shrink_to_diag gamma
 
 stability:
-  floor_eps: 1.5e-3   # slightly higher → more stable GMVP weights, lower realized variance
+  floor_eps: 1.5e-3 # slightly higher → more stable GMVP weights, lower realized variance
   apply_floor_to: "gmvp_only"
+  model_blend_to_pers_strength: 0.35 # uncertainty-aware fallback: blend model toward pers when regime confidence is low
+  model_blend_to_pers_conf_threshold: 0.75 # only blend when confidence is below this
+  model_blend_to_pers_power: 2.0 # sharper: high-confidence days are ~pure model
 
 outputs:
   outdir: "results"

@@ -138,6 +138,15 @@ def trace_ratio_guardrail(S_hat: np.ndarray, S_ref: np.ndarray, lo: float, hi: f
     return False, r
 
 
+def trace_ratio(S_hat: np.ndarray, S_ref: np.ndarray) -> float:
+    tr_hat = float(np.trace(S_hat))
+    tr_ref = float(np.trace(S_ref))
+    if (not np.isfinite(tr_hat)) or (not np.isfinite(tr_ref)) or tr_ref <= 0:
+        return float("nan")
+    r = tr_hat / tr_ref
+    return float(r) if np.isfinite(r) else float("nan")
+
+
 def build_model(
     *,
     target_type: str,
@@ -302,6 +311,7 @@ def run_backtest(
     # guardrail
     trace_ratio_lo: float,
     trace_ratio_hi: float,
+    guardrail_mode: str = "invalid_only",  # "invalid_only" (recommended) | "ratio_or_invalid"
 
     # mixing
     mix_lambda: float,
@@ -313,6 +323,10 @@ def run_backtest(
     # stability / floor
     floor_eps: float,
     apply_floor_to: str,
+    # stability: uncertainty-aware blending (covariance/precision only)
+    model_blend_to_pers_strength: float = 0.0,  # 0=off; higher => more fallback to pers when regime confidence is low
+    model_blend_to_pers_conf_threshold: float = 0.0,  # 0=off; blend only when conf_adj < threshold
+    model_blend_to_pers_power: float = 1.0,  # >1 makes blending kick in sharply at low confidence
 
     # design choices (for ablation)
     knn_metric: str = "l2",
@@ -362,6 +376,14 @@ def run_backtest(
     is_vol = target_type == "volatility"
     is_precision = target_type == "precision"
     use_filter = str(regime_weighting).lower() == "filtered"
+    model_blend_to_pers_strength = float(np.clip(model_blend_to_pers_strength, 0.0, 1.0))
+    model_blend_to_pers_conf_threshold = float(np.clip(model_blend_to_pers_conf_threshold, 0.0, 1.0))
+    model_blend_to_pers_power = float(model_blend_to_pers_power)
+    if not np.isfinite(model_blend_to_pers_power) or model_blend_to_pers_power <= 0:
+        model_blend_to_pers_power = 1.0
+    guardrail_mode = str(guardrail_mode).lower()
+    if guardrail_mode not in {"invalid_only", "ratio_or_invalid"}:
+        raise ValueError("guardrail_mode must be 'invalid_only' or 'ratio_or_invalid'")
 
     # GMVP stability tracking per method (covariance only)
     w_prev = {"model": None, "mix": None, "roll": None, "pers": None, "shrink": None}
@@ -481,9 +503,11 @@ def run_backtest(
         else:
             Sigma_hat, alpha_t, pi_t = pred_out[0], pred_out[1], pred_out[2]
             Sigma_hat = np.asarray(Sigma_hat, dtype=float)
+            P_hat = None
             if is_precision:
-                # Model forecasts precision; convert to covariance for guardrail, mix, GMVP, metrics
-                Sigma_hat = project_to_spd(np.linalg.inv(Sigma_hat), eps=1e-8)
+                # Model forecasts precision (P). Keep P_hat for GMVP weights; also compute Sigma_hat for mixing/metrics.
+                P_hat = project_to_spd(Sigma_hat, eps=1e-8)
+                Sigma_hat = project_to_spd(np.linalg.inv(P_hat), eps=1e-8)
         K_regimes = alpha_t.size
         regime_assigned = int(np.argmax(alpha_t))
 
@@ -553,9 +577,56 @@ def run_backtest(
         # (5) Trace rescale then guardrail on model Sigma_hat
         # Rescale so trace is in [lo, hi] relative to S_roll; then guardrail only for invalid/NaN.
         # ----------------------------
+        ratio_pre = trace_ratio(Sigma_hat, S_roll)
         Sigma_hat = rescale_covariance_trace(Sigma_hat, S_roll, float(trace_ratio_lo), float(trace_ratio_hi))
-        bad, ratio = trace_ratio_guardrail(Sigma_hat, S_roll, lo=float(trace_ratio_lo), hi=float(trace_ratio_hi))
+        ratio_post = trace_ratio(Sigma_hat, S_roll)
+
+        bad_ratio, ratio_chk = trace_ratio_guardrail(Sigma_hat, S_roll, lo=float(trace_ratio_lo), hi=float(trace_ratio_hi))
+        bad_invalid = (not np.isfinite(float(np.trace(Sigma_hat)))) or (not np.isfinite(float(np.trace(S_roll)))) or float(np.trace(S_roll)) <= 0
+        if guardrail_mode == "ratio_or_invalid":
+            bad = bool(bad_ratio)
+            guardrail_reason = "ratio" if (bad_ratio and np.isfinite(ratio_chk)) else "invalid"
+        else:
+            bad = bool(bad_invalid)
+            guardrail_reason = "invalid" if bad else ""
+        ratio = ratio_chk
         Sigma_hat_use = S_shrink if bad else Sigma_hat
+
+        # ----------------------------
+        # (5b) Uncertainty-aware fallback to persistence
+        # If regimes are uncertain, blend model toward S_pers to reduce left-tail blowups in GMVP.
+        # ----------------------------
+        conf_raw = float(np.max(alpha_t)) if hasattr(alpha_t, "size") and alpha_t.size > 0 else float("nan")
+        conf_adj = float("nan")
+        model_pers_blend_lambda = 1.0
+        if model_blend_to_pers_strength > 0.0:
+            # Confidence adjusted so uniform alpha => 0, one-hot => 1
+            K = int(alpha_t.size) if hasattr(alpha_t, "size") else 0
+            if K > 1:
+                conf_adj = (conf_raw - (1.0 / K)) / (1.0 - (1.0 / K))
+                conf_adj = float(np.clip(conf_adj, 0.0, 1.0))
+            elif K == 1:
+                conf_adj = 1.0
+            else:
+                conf_adj = 0.0
+
+            # If threshold enabled, only blend below it; scale to [0,1] "uncertainty" within that region.
+            if model_blend_to_pers_conf_threshold > 0.0:
+                if conf_adj >= model_blend_to_pers_conf_threshold:
+                    unc = 0.0
+                else:
+                    unc = (model_blend_to_pers_conf_threshold - conf_adj) / max(model_blend_to_pers_conf_threshold, 1e-12)
+            else:
+                unc = 1.0 - conf_adj
+            # Shape: power>1 makes blending more selective (near 0 unless confidence is low).
+            unc = float(np.clip(unc, 0.0, 1.0)) ** float(model_blend_to_pers_power)
+
+            lam = 1.0 - model_blend_to_pers_strength * unc  # in [1-strength, 1]
+            model_pers_blend_lambda = float(lam)
+            Sigma_hat_use = project_to_spd(
+                ((lam * Sigma_hat_use + (1.0 - lam) * S_pers) + (lam * Sigma_hat_use + (1.0 - lam) * S_pers).T) / 2.0,
+                eps=1e-8,
+            )
 
         # shrinkage / persistence / model mixing (hybrid)
         # Default behavior (if cov_mix_weights not provided) remains:
@@ -586,7 +657,19 @@ def run_backtest(
         S_pers_use  = _spd_floor(S_pers,        float(floor_eps))
         S_shrk_use  = _spd_floor(S_shrink,      float(floor_eps))
 
-        w_model  = gmvp_weights(S_model_use, long_only=bool(long_only))
+        # If the model target is precision, compute GMVP weights directly from precision (w ∝ P 1)
+        if is_precision and (P_hat is not None) and (not bool(long_only)):
+            P_use = _spd_floor(P_hat, float(floor_eps))
+            ones = np.ones(P_use.shape[0])
+            try:
+                x = P_use @ ones
+            except Exception:
+                x = ones
+            denom = float(ones @ x)
+            w_model = (x / denom) if np.isfinite(denom) and abs(denom) > 1e-18 else (np.ones_like(ones) / ones.size)
+            w_model = w_model.astype(float)
+        else:
+            w_model  = gmvp_weights(S_model_use, long_only=bool(long_only))
         w_mix    = gmvp_weights(S_mix_use,   long_only=bool(long_only))
         w_roll_i = gmvp_weights(S_roll_use,  long_only=bool(long_only))
         w_pers_i = gmvp_weights(S_pers_use,  long_only=bool(long_only))
@@ -637,7 +720,17 @@ def run_backtest(
             "date": anchor_date,
             "raw_anchor": int(raw_anchor),
             "guardrail_trace_ratio": float(ratio) if np.isfinite(ratio) else np.nan,
+            "guardrail_trace_ratio_pre": float(ratio_pre) if np.isfinite(ratio_pre) else np.nan,
+            "guardrail_trace_ratio_post": float(ratio_post) if np.isfinite(ratio_post) else np.nan,
             "guardrail_triggered": bool(bad),
+            "guardrail_trigger_reason": str(guardrail_reason),
+            "guardrail_mode": str(guardrail_mode),
+            "model_regime_conf_raw": float(conf_raw) if np.isfinite(conf_raw) else np.nan,
+            "model_regime_conf_adj": float(conf_adj) if np.isfinite(conf_adj) else np.nan,
+            "model_pers_blend_lambda": float(model_pers_blend_lambda),
+            "model_blend_to_pers_strength": float(model_blend_to_pers_strength),
+            "model_blend_to_pers_conf_threshold": float(model_blend_to_pers_conf_threshold),
+            "model_blend_to_pers_power": float(model_blend_to_pers_power),
             "mix_lambda": float(mix_lambda),
             "shrink_gamma": float(shrink_gamma),
             "floor_eps": float(floor_eps),
@@ -785,6 +878,7 @@ def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple
         min_samples_for_gmm=int(icfg["min_samples_for_gmm"]),
         trace_ratio_lo=float(gcfg["trace_ratio_lo"]),
         trace_ratio_hi=float(gcfg["trace_ratio_hi"]),
+        guardrail_mode=str(gcfg.get("mode", "invalid_only")),
         mix_lambda=float(mixcfg["mix_lambda"]),
         shrink_gamma=float(mixcfg["shrink_gamma"]),
         vol_dampen_toward_roll=float(mixcfg.get("vol_dampen_toward_roll", 0.0)),
@@ -792,6 +886,9 @@ def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple
         cov_mix_weights=mixcfg.get("cov_mix_weights") or None,
         floor_eps=float(stcfg["floor_eps"]),
         apply_floor_to=str(stcfg["apply_floor_to"]),
+        model_blend_to_pers_strength=float(stcfg.get("model_blend_to_pers_strength", 0.0)),
+        model_blend_to_pers_conf_threshold=float(stcfg.get("model_blend_to_pers_conf_threshold", 0.0)),
+        model_blend_to_pers_power=float(stcfg.get("model_blend_to_pers_power", 1.0)),
         knn_metric=str(mcfg.get("knn_metric", "l2")),
         regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
         regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
@@ -896,6 +993,7 @@ def main():
 
         trace_ratio_lo=float(gcfg["trace_ratio_lo"]),
         trace_ratio_hi=float(gcfg["trace_ratio_hi"]),
+        guardrail_mode=str(gcfg.get("mode", "invalid_only")),
 
         mix_lambda=float(mixcfg["mix_lambda"]),
         shrink_gamma=float(mixcfg["shrink_gamma"]),
@@ -904,6 +1002,9 @@ def main():
         cov_mix_weights=mixcfg.get("cov_mix_weights") or None,
         floor_eps=float(stcfg["floor_eps"]),
         apply_floor_to=str(stcfg["apply_floor_to"]),
+        model_blend_to_pers_strength=float(stcfg.get("model_blend_to_pers_strength", 0.0)),
+        model_blend_to_pers_conf_threshold=float(stcfg.get("model_blend_to_pers_conf_threshold", 0.0)),
+        model_blend_to_pers_power=float(stcfg.get("model_blend_to_pers_power", 1.0)),
         knn_metric=str(mcfg.get("knn_metric", "l2")),
         regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
         regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
@@ -938,6 +1039,21 @@ def main():
         stats = {"pct_guardrail_triggered": round(pct, 2), "n_days": int(len(results))}
         if ratio_mean is not None and np.isfinite(ratio_mean):
             stats["guardrail_trace_ratio_mean"] = float(ratio_mean)
+        if "guardrail_trigger_reason" in results.columns:
+            vc = results["guardrail_trigger_reason"].fillna("").astype(str).value_counts(dropna=False).to_dict()
+            stats["guardrail_trigger_reason_counts"] = {str(k): int(v) for k, v in vc.items()}
+        if "guardrail_mode" in results.columns and len(results) > 0:
+            stats["guardrail_mode"] = str(results["guardrail_mode"].iloc[-1])
+
+        # Pers-fallback diagnostics (uncertainty-aware blending)
+        if "model_pers_blend_lambda" in results.columns:
+            lam = pd.to_numeric(results["model_pers_blend_lambda"], errors="coerce")
+            stats["pct_model_blended_to_pers"] = float((lam < 0.999999).mean() * 100.0)
+            stats["model_pers_blend_lambda_mean"] = float(lam.mean())
+            stats["model_pers_blend_lambda_min"] = float(lam.min())
+        if "model_regime_conf_adj" in results.columns:
+            ca = pd.to_numeric(results["model_regime_conf_adj"], errors="coerce")
+            stats["model_regime_conf_adj_mean"] = float(ca.mean())
         import json
         guardrail_path = os.path.join(tag_dir, "guardrail_stats.json")
         with open(guardrail_path, "w") as f:

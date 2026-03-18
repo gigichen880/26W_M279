@@ -1,0 +1,31 @@
+base_config: regime_covariance.yaml
+mode: one_at_a_time
+overrides:
+  data:
+    start_date: '2015-01-01'
+    end_date: '2021-12-31'
+  model:
+    transition_estimator: soft
+    knn_metric: l2
+    regime_weighting: raw_pi
+    regime_aggregation: soft
+  embedder:
+    name: pca
+  backtest:
+    stride: 5
+    refit_mode: days
+    refit_every_days: 20
+axes:
+  k_neighbors:
+    key: backtest.k_neighbors
+    choices:
+    - 3
+    - 5
+    - 8
+    - 10
+    - 15
+    - 20
+    - 30
+    - 50
+outputs:
+  outdir: results/regime_covariance/ablation_k_neighbors

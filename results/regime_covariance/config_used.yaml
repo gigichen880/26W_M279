@@ -49,6 +49,7 @@ internals:
 guardrail:
   trace_ratio_lo: 0.5
   trace_ratio_hi: 2.5
+  mode: invalid_only
 mixing:
   cov_mix_weights:
     shrink: 0.55
@@ -59,6 +60,9 @@ mixing:
 stability:
   floor_eps: 0.0015
   apply_floor_to: gmvp_only
+  model_blend_to_pers_strength: 0.35
+  model_blend_to_pers_conf_threshold: 0.75
+  model_blend_to_pers_power: 2.0
 outputs:
   outdir: results
   tag: regime_covariance
