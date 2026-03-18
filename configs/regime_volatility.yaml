@@ -63,9 +63,9 @@ guardrail:
 mixing:
   mix_lambda: 0.2
   shrink_gamma: 0.3
-  # Blend model with roll + shrink to improve MSE (vol is persistent; kNN alone is noisy)
-  vol_dampen_toward_roll: 0.5   # 50% roll → "model" = 50% kNN + 50% roll
-  vol_dampen_toward_shrink: 0.15  # 15% shrink → "model" = 35% kNN + 50% roll + 15% shrink
+  # "Model" reported in backtest = blend below (not raw kNN). See docs/MODEL_VS_MIX_DESIGN.md.
+  vol_dampen_toward_roll: 0.5   # 50% roll → "model" = 35% kNN + 50% roll + 15% shrink
+  vol_dampen_toward_shrink: 0.15
 
 stability:
   floor_eps: 5.0e-4

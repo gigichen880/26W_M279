@@ -256,6 +256,59 @@ def plot_statistical_comparison(
     plt.close()
 
 
+def plot_forecast_correlation(
+    raw_df: pd.DataFrame,
+    out_dir: Path,
+    *,
+    target: str,
+):
+    """
+    Correlation among model and baselines only (excludes mix). For cov: fro series; for vol: vol_mse.
+    Saves forecast_correlation.png and forecast_correlation.csv.
+    """
+    methods = ["model", "roll", "pers", "shrink"]
+    if target == "volatility":
+        metric = "vol_mse"
+        title_metric = "Vol MSE (log-vol)"
+    else:
+        metric = "fro"
+        title_metric = "Frobenius error"
+    cols = [f"{m}_{metric}" for m in methods]
+    missing = [c for c in cols if c not in raw_df.columns]
+    if missing:
+        return
+    block = raw_df[cols].copy()
+    block = block.rename(columns={c: m for c, m in zip(cols, methods)})
+    block = block.dropna(how="all")
+    for m in methods:
+        block[m] = pd.to_numeric(block[m], errors="coerce")
+    block = block.dropna()
+    if block.shape[0] < 3:
+        return
+    corr = block.corr()
+    corr = corr.reindex(index=methods, columns=methods)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    corr.to_csv(out_dir / "forecast_correlation.csv")
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(corr.values, cmap="RdBu_r", vmin=-1, vmax=1, aspect="equal")
+    for i in range(len(methods)):
+        for j in range(len(methods)):
+            v = corr.iloc[i, j]
+            txt = f"{v:.2f}" if np.isfinite(v) else "—"
+            ax.text(j, i, txt, ha="center", va="center", fontsize=11, fontweight="bold")
+    ax.set_xticks(range(len(methods)))
+    ax.set_yticks(range(len(methods)))
+    ax.set_xticklabels([m.capitalize() for m in methods], fontsize=11)
+    ax.set_yticklabels([m.capitalize() for m in methods], fontsize=11)
+    ax.set_title(f"Forecast correlation across dates ({title_metric})\nModel + baselines only (no mix)", fontsize=12, fontweight="bold")
+    fig.text(0.5, 0.02, "High correlation → forecasts move together → ensembling adds little diversification of error risk.", ha="center", fontsize=9, style="italic", wrap=True)
+    plt.colorbar(im, ax=ax, label="Pearson r", shrink=0.8)
+    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+    plt.savefig(out_dir / "forecast_correlation.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Statistical comparison (paired t-tests) for cov or vol backtest")
     ap.add_argument("--input", default=None, help="Backtest parquet or CSV (default: auto-detect cov/vol)")
@@ -272,6 +325,8 @@ def main():
     plot_statistical_comparison(model_results, df, out_dir / "model_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
     mix_results = compare_vs_reference(df, reference="mix", baselines=("roll", "pers", "shrink"), metrics=metrics)
     plot_statistical_comparison(mix_results, df, out_dir / "mix_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+    target_resolved = "volatility" if "model_vol_mse" in df.columns else "covariance"
+    plot_forecast_correlation(df, out_dir, target=target_resolved)
 
 
 if __name__ == "__main__":
