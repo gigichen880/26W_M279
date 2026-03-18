@@ -39,7 +39,7 @@ from similarity_forecast.backtests import (
     hold_period_portfolio_stats,
 )
 from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder, VolStatsEmbedder
-from similarity_forecast.target_objects import CovarianceTarget, VolTarget
+from similarity_forecast.target_objects import CovarianceTarget, PrecisionTarget, VolTarget
 from similarity_forecast.core import (
     LogEuclideanSPDMean,
     ArithmeticSPDMean,
@@ -71,6 +71,32 @@ def _spd_floor(S: np.ndarray, eps: float, proj_eps: float = 1e-8) -> np.ndarray:
 def _mix_cov(S_model: np.ndarray, S_shrink: np.ndarray, lam: float, proj_eps: float = 1e-8) -> np.ndarray:
     lam = float(np.clip(lam, 0.0, 1.0))
     S = (1.0 - lam) * S_shrink + lam * S_model
+    return project_to_spd((S + S.T) / 2.0, eps=proj_eps)
+
+
+def _mix_cov_multi(
+    *,
+    S_model: np.ndarray,
+    S_shrink: np.ndarray,
+    S_pers: np.ndarray,
+    w_model: float,
+    w_shrink: float,
+    w_pers: float,
+    proj_eps: float = 1e-8,
+) -> np.ndarray:
+    """
+    Multi-way convex combination for covariance mixing.
+
+    Weights are non-negative and normalized to sum to 1.
+    """
+    w = np.array([w_model, w_shrink, w_pers], dtype=float)
+    w = np.clip(w, 0.0, np.inf)
+    s = float(w.sum())
+    if not np.isfinite(s) or s <= 0:
+        # fallback: pure shrink
+        return project_to_spd(((S_shrink + S_shrink.T) / 2.0), eps=proj_eps)
+    w /= s
+    S = w[0] * S_model + w[1] * S_shrink + w[2] * S_pers
     return project_to_spd((S + S.T) / 2.0, eps=proj_eps)
 
 
@@ -118,6 +144,9 @@ def build_model(
     # ablation / design choices
     knn_metric: str = "l2",
     regime_aggregation: str = "soft",
+    # pipeline stability
+    output_shrink_toward_diag: float = 0.0,
+    alpha_smooth_frac: float = 0.0,
 ) -> RegimeAwareSimilarityForecaster:
     embedder_name = str(embedder_name).lower()
     aggregator_name = str(aggregator_name).lower()
@@ -154,8 +183,16 @@ def build_model(
             aggregator = ArithmeticSPDMean(eps_spd=float(eps_spd))
         else:
             raise ValueError("aggregator.name for covariance must be one of {'logeuc','arith'}")
+    elif target_type == "precision":
+        target = PrecisionTarget(ddof=int(ddof))
+        if aggregator_name == "logeuc":
+            aggregator = LogEuclideanSPDMean(eps_spd=float(eps_spd))
+        elif aggregator_name == "arith":
+            aggregator = ArithmeticSPDMean(eps_spd=float(eps_spd))
+        else:
+            raise ValueError("aggregator.name for precision must be one of {'logeuc','arith'}")
     else:
-        raise ValueError("target_type must be one of {'covariance','volatility'}")
+        raise ValueError("target_type must be one of {'covariance','volatility','precision'}")
 
     regime_model = RegimeModel(
         n_regimes=int(n_regimes),
@@ -176,6 +213,8 @@ def build_model(
         sample_stride=int(sample_stride),
         knn_metric=str(knn_metric).lower(),
         regime_aggregation=str(regime_aggregation).lower(),
+        output_shrink_toward_diag=float(output_shrink_toward_diag),
+        alpha_smooth_frac=float(alpha_smooth_frac),
     )
 
 
@@ -245,7 +284,9 @@ def run_backtest(
     # mixing
     mix_lambda: float,
     shrink_gamma: float,
-    vol_dampen_toward_roll: float = 0.0,  # vol only: blend model toward rolling (0=off, 0.2=20% roll)
+    vol_dampen_toward_roll: float = 0.0,   # vol only: blend model toward rolling
+    vol_dampen_toward_shrink: float = 0.0,  # vol only: blend model toward shrink (in addition to roll)
+    cov_mix_weights: dict | None = None,  # optional: {"shrink": w, "pers": w, "model": w} for 3-way mix (covariance only)
 
     # stability / floor
     floor_eps: float,
@@ -255,6 +296,9 @@ def run_backtest(
     knn_metric: str = "l2",
     regime_aggregation: str = "soft",
     regime_weighting: str = "filtered",  # "filtered" | "raw_pi"
+    # pipeline stability (improve GMVP variance)
+    output_shrink_toward_diag: float = 0.0,  # blend model forecast with its diagonal; 0=off
+    alpha_smooth_frac: float = 0.0,         # blend regime alpha with uniform; 0=off
 ) -> pd.DataFrame:
     if not isinstance(returns_df.index, pd.DatetimeIndex):
         raise ValueError("returns_df.index must be a DatetimeIndex.")
@@ -294,6 +338,7 @@ def run_backtest(
     rows: list[dict] = []
     target_type = str(target_type).lower()
     is_vol = target_type == "volatility"
+    is_precision = target_type == "precision"
     use_filter = str(regime_weighting).lower() == "filtered"
 
     # GMVP stability tracking per method (covariance only)
@@ -352,6 +397,8 @@ def run_backtest(
                 eps_spd=float(eps_spd),
                 knn_metric=str(knn_metric),
                 regime_aggregation=str(regime_aggregation),
+                output_shrink_toward_diag=float(output_shrink_toward_diag),
+                alpha_smooth_frac=float(alpha_smooth_frac),
             )
 
             if verbose:
@@ -412,6 +459,9 @@ def run_backtest(
         else:
             Sigma_hat, alpha_t, pi_t = pred_out[0], pred_out[1], pred_out[2]
             Sigma_hat = np.asarray(Sigma_hat, dtype=float)
+            if is_precision:
+                # Model forecasts precision; convert to covariance for guardrail, mix, GMVP, metrics
+                Sigma_hat = project_to_spd(np.linalg.inv(Sigma_hat), eps=1e-8)
         K_regimes = alpha_t.size
         regime_assigned = int(np.argmax(alpha_t))
 
@@ -426,15 +476,20 @@ def run_backtest(
             continue
 
         y_true = np.asarray(y_true, dtype=float)
+        if not is_vol and is_precision:
+            # True target is precision; convert to covariance for metrics and comparison
+            y_true = project_to_spd(np.linalg.inv(y_true), eps=1e-8)
 
         if is_vol:
             vol_true = y_true.reshape(-1)
             vol_roll = baseline_rolling_vol(past, ddof=int(ddof))
             vol_pers = baseline_persistence_vol(R, raw_anchor=raw_anchor, horizon=int(horizon), ddof=int(ddof))
             vol_shrink = baseline_shrink_vol_toward_cs_mean(past, ddof=int(ddof), gamma=float(shrink_gamma))
-            # Dampen model forecast toward rolling to reduce overshooting (helps when kNN is noisy)
-            vol_dampen = float(vol_dampen_toward_roll)
-            vol_hat_use = (1.0 - vol_dampen) * vol_hat + vol_dampen * vol_roll
+            # Dampen model toward roll and optionally shrink to reduce kNN variance and improve MSE
+            damp_roll = float(vol_dampen_toward_roll)
+            damp_shrink = float(vol_dampen_toward_shrink)
+            damp_total = min(1.0, damp_roll + damp_shrink)
+            vol_hat_use = (1.0 - damp_total) * vol_hat + damp_roll * vol_roll + damp_shrink * vol_shrink
             vol_mix = (1.0 - float(mix_lambda)) * vol_shrink + float(mix_lambda) * vol_hat_use
             m_model = eval_vol_metrics(vol_hat_use, vol_true)
             m_mix   = eval_vol_metrics(vol_mix, vol_true)
@@ -478,8 +533,24 @@ def run_backtest(
         bad, ratio = trace_ratio_guardrail(Sigma_hat, S_roll, lo=float(trace_ratio_lo), hi=float(trace_ratio_hi))
         Sigma_hat_use = S_shrink if bad else Sigma_hat
 
-        # shrinkage mixing (hybrid)
-        S_mix = _mix_cov(S_model=Sigma_hat_use, S_shrink=S_shrink, lam=float(mix_lambda))
+        # shrinkage / persistence / model mixing (hybrid)
+        # Default behavior (if cov_mix_weights not provided) remains:
+        #   S_mix = (1-lam)*S_shrink + lam*S_model
+        cov_w = cov_mix_weights if isinstance(cov_mix_weights, dict) else {}
+        if isinstance(cov_w, dict) and cov_w:
+            w_model = float(cov_w.get("model", 0.0))
+            w_shrink = float(cov_w.get("shrink", 0.0))
+            w_pers = float(cov_w.get("pers", 0.0))
+            S_mix = _mix_cov_multi(
+                S_model=Sigma_hat_use,
+                S_shrink=S_shrink,
+                S_pers=S_pers,
+                w_model=w_model,
+                w_shrink=w_shrink,
+                w_pers=w_pers,
+            )
+        else:
+            S_mix = _mix_cov(S_model=Sigma_hat_use, S_shrink=S_shrink, lam=float(mix_lambda))
 
         # ----------------------------
         # (6) GMVP strategy (optionally floored)
@@ -692,11 +763,15 @@ def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple
         mix_lambda=float(mixcfg["mix_lambda"]),
         shrink_gamma=float(mixcfg["shrink_gamma"]),
         vol_dampen_toward_roll=float(mixcfg.get("vol_dampen_toward_roll", 0.0)),
+        vol_dampen_toward_shrink=float(mixcfg.get("vol_dampen_toward_shrink", 0.0)),
+        cov_mix_weights=mixcfg.get("cov_mix_weights") or None,
         floor_eps=float(stcfg["floor_eps"]),
         apply_floor_to=str(stcfg["apply_floor_to"]),
         knn_metric=str(mcfg.get("knn_metric", "l2")),
         regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
         regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
+        output_shrink_toward_diag=float(mcfg.get("output_shrink_toward_diag", 0)),
+        alpha_smooth_frac=float(mcfg.get("alpha_smooth_frac", 0)),
     )
     return results, target_type
 
@@ -800,11 +875,15 @@ def main():
         mix_lambda=float(mixcfg["mix_lambda"]),
         shrink_gamma=float(mixcfg["shrink_gamma"]),
         vol_dampen_toward_roll=float(mixcfg.get("vol_dampen_toward_roll", 0.0)),
+        vol_dampen_toward_shrink=float(mixcfg.get("vol_dampen_toward_shrink", 0.0)),
+        cov_mix_weights=mixcfg.get("cov_mix_weights") or None,
         floor_eps=float(stcfg["floor_eps"]),
         apply_floor_to=str(stcfg["apply_floor_to"]),
         knn_metric=str(mcfg.get("knn_metric", "l2")),
         regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
         regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
+        output_shrink_toward_diag=float(mcfg.get("output_shrink_toward_diag", 0)),
+        alpha_smooth_frac=float(mcfg.get("alpha_smooth_frac", 0)),
     )
 
     # Write canonical files

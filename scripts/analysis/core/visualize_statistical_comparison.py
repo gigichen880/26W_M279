@@ -21,13 +21,14 @@ DEFAULT_BACKTEST_VOL = resolve_backtest_path("regime_volatility")
 
 def _cov_config():
     return {
-        "metrics": ("fro", "stein", "kl", "gmvp_sharpe", "gmvp_var", "turnover_l1"),
-        "key_metrics_plot": ["fro", "stein", "kl", "gmvp_sharpe", "gmvp_var", "turnover_l1"],
+        "metrics": ("fro", "stein", "kl", "gmvp_mean", "gmvp_sharpe", "gmvp_var", "turnover_l1"),
+        "key_metrics_plot": ["fro", "stein", "kl", "gmvp_mean", "gmvp_sharpe", "gmvp_var", "turnover_l1"],
         "lower_is_better": {"fro", "logeuc", "kl", "stein", "nll", "gmvp_var", "gmvp_vol", "turnover_l1"},
         "metric_labels": {
             "fro": "Frobenius Error\n(lower is better)",
             "stein": "Stein Loss\n(lower is better)",
             "kl": "Gaussian KL Divergence\n(lower is better)",
+            "gmvp_mean": "GMVP Mean Return\n(higher is better)",
             "gmvp_sharpe": "GMVP Sharpe\n(higher is better)",
             "gmvp_var": "GMVP Variance\n(lower is better)",
             "turnover_l1": "Turnover L1\n(lower is better)",
@@ -129,54 +130,127 @@ def compare_vs_reference(df, reference="model", baselines=("roll", "pers", "shri
     return pd.DataFrame(results)
 
 
-def normalize_difference(metric_name: str, raw_diff: float, lower_is_better: set) -> float:
-    return -raw_diff if metric_name in lower_is_better else raw_diff
+def _sig_marker(p: float) -> str:
+    if np.isnan(p):
+        return ""
+    if p < 0.01:
+        return "***"
+    if p < 0.05:
+        return "**"
+    if p < 0.10:
+        return "*"
+    return ""
 
 
-def plot_statistical_comparison(results_df: pd.DataFrame, out_path: Path, *, key_metrics_plot: list, metric_labels: dict, lower_is_better: set):
-    if results_df.empty:
+def plot_statistical_comparison(
+    results_df: pd.DataFrame,
+    raw_df: pd.DataFrame,
+    out_path: Path,
+    *,
+    key_metrics_plot: list,
+    metric_labels: dict,
+    lower_is_better: set,
+):
+    """Boxplots of paired difference (ref − baseline), normalized so positive = ref better. One box per baseline; t-statistic annotated."""
+    if results_df.empty or raw_df.empty:
         return
     reference = results_df["reference"].iloc[0]
-    results_df = results_df.copy()
-    results_df["normalized_diff"] = results_df.apply(lambda r: normalize_difference(r["metric"], r["mean_diff"], lower_is_better), axis=1)
-    df_plot = results_df[results_df["metric"].isin(key_metrics_plot)]
+    baselines = ["shrink", "roll", "pers"]
+    df_plot = results_df[results_df["metric"].isin(key_metrics_plot)].copy()
     if df_plot.empty:
         return
     n_metrics = len(key_metrics_plot)
-    fig, axes = plt.subplots(n_metrics, 1, figsize=(10, max(6, 2 * n_metrics)))
+    fig, axes = plt.subplots(n_metrics, 1, figsize=(14, max(5, 2 * n_metrics)))
     if n_metrics == 1:
         axes = [axes]
-    baselines = sorted(df_plot["baseline"].unique())
+    ref_label = reference.capitalize()
+    color_better = "#2e7d32"
+    color_worse = "#c62828"
     for idx, metric in enumerate(key_metrics_plot):
         ax = axes[idx]
-        metric_df = df_plot[df_plot["metric"] == metric]
-        metric_df = metric_df.set_index("baseline").reindex(baselines).reset_index()
-        metric_df = metric_df.dropna(subset=["normalized_diff"])
-        if metric_df.empty:
+        col_ref = f"{reference}_{metric}"
+        if col_ref not in raw_df.columns:
             continue
-        y_labels = metric_df["baseline"].str.capitalize()
-        normalized = metric_df["normalized_diff"].values
-        colors = ["#2e7d32" if x > 0 else "#c62828" for x in normalized]
-        bars = ax.barh(y_labels, normalized, color=colors, alpha=0.7, edgecolor="black")
-        for bar, (_, row) in zip(bars, metric_df.iterrows()):
-            marker = "***" if row["significant_1pct"] else ("**" if row["significant_5pct"] else "")
-            if marker:
-                x_pos = bar.get_width()
-                y_pos = bar.get_y() + bar.get_height() / 2
-                ax.text(x_pos, y_pos, f" {marker}", va="center", ha="left" if x_pos > 0 else "right", fontsize=10, fontweight="bold")
-        ax.axvline(0, color="black", linewidth=1)
-        ax.set_title(metric_labels.get(metric, metric), fontsize=11, fontweight="bold")
-        ax.set_xlabel(f"{reference.capitalize()} Advantage")
+        ref_vals = pd.to_numeric(raw_df[col_ref], errors="coerce")
+        higher_better = metric not in lower_is_better
+        diffs_list = []
+        positions = []
+        present_baselines = []
+        for baseline in baselines:
+            col_base = f"{baseline}_{metric}"
+            if col_base not in raw_df.columns:
+                continue
+            base_vals = pd.to_numeric(raw_df[col_base], errors="coerce")
+            valid = np.isfinite(ref_vals) & np.isfinite(base_vals)
+            r = ref_vals.loc[valid].values
+            b = base_vals.loc[valid].values
+            if len(r) < 2:
+                continue
+            raw_diff = r - b
+            diff = raw_diff if higher_better else -raw_diff
+            g = len(present_baselines)
+            diffs_list.append(diff)
+            positions.append(g)
+            present_baselines.append(baseline)
+        if not diffs_list:
+            continue
+        bp = ax.boxplot(
+            diffs_list,
+            positions=positions,
+            widths=0.5,
+            patch_artist=True,
+            showfliers=False,
+            zorder=1,
+            vert=False,
+        )
+        for i, patch in enumerate(bp["boxes"]):
+            med = np.median(diffs_list[i])
+            patch.set_facecolor(color_better if med > 0 else color_worse)
+            patch.set_alpha(0.85)
+        for whisker in bp["whiskers"]:
+            whisker.set_color("black")
+        for cap in bp["caps"]:
+            cap.set_color("black")
+        for median in bp["medians"]:
+            median.set_color("black")
+            median.set_linewidth(2)
+        ax.axvline(0, color="black", linestyle="--", linewidth=1, zorder=0)
+        ax.set_yticks(positions)
+        ax.set_yticklabels([f"vs {b.capitalize()}" for b in present_baselines], fontsize=10)
+        ax.set_xlabel("Difference (positive = " + ref_label + " better)", fontsize=10)
+        metric_title = metric_labels.get(metric, metric).split("\n")[0]
+        ax.set_title(metric_title, fontsize=10, fontweight="bold")
+        all_diffs = np.concatenate(diffs_list)
+        x_min, x_max = np.nanpercentile(all_diffs, [1, 99])
+        x_span = max(abs(x_min), abs(x_max), 1e-12) * 1.15
+        ax.set_xlim(-x_span, x_span)
+        for g, baseline in enumerate(present_baselines):
+            row = df_plot[(df_plot["metric"] == metric) & (df_plot["baseline"] == baseline)]
+            if row.empty:
+                continue
+            row = row.iloc[0]
+            t_val = row.get("t_statistic", np.nan)
+            p_val = row.get("p_value", np.nan)
+            sig = _sig_marker(p_val)
+            t_str = f"t = {t_val:.2f}{sig}" if np.isfinite(t_val) else "t = —"
+            ax.text(x_span * 0.97, g, " " + t_str, ha="right", va="center", fontsize=9)
         ax.grid(axis="x", alpha=0.3)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=color_better, alpha=0.85, edgecolor="black", label=ref_label + " better (median diff > 0)"),
+        Patch(facecolor=color_worse, alpha=0.85, edgecolor="black", label=ref_label + " worse (median diff < 0)"),
+    ]
+    fig.legend(handles=legend_elements, loc="upper center", ncol=2, bbox_to_anchor=(0.5, 0.995), fontsize=9)
     fig.suptitle(
-        f"Statistical Comparison: {reference.capitalize()} vs Baselines\nGreen = Better than Baselines, Red = Worse than Baselines",
-        fontsize=13,
+        f"Statistical Comparison: {ref_label} vs Baselines (paired difference; positive = {ref_label} better)",
+        fontsize=12,
         fontweight="bold",
-        y=0.995,
+        y=0.96,
     )
-    plt.tight_layout()
+    fig.text(0.5, 0.01, "Paired t-test on daily outcomes. t = test statistic; *** p<0.01, ** p<0.05, * p<0.10.", ha="center", fontsize=9, style="italic")
+    plt.tight_layout(rect=[0, 0.02, 1, 0.94])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close()
@@ -195,9 +269,9 @@ def main():
     labels = config["metric_labels"]
     lower = config["lower_is_better"]
     model_results = compare_vs_reference(df, reference="model", baselines=("roll", "pers", "shrink"), metrics=metrics)
-    plot_statistical_comparison(model_results, out_dir / "model_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+    plot_statistical_comparison(model_results, df, out_dir / "model_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
     mix_results = compare_vs_reference(df, reference="mix", baselines=("roll", "pers", "shrink"), metrics=metrics)
-    plot_statistical_comparison(mix_results, out_dir / "mix_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+    plot_statistical_comparison(mix_results, df, out_dir / "mix_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
 
 
 if __name__ == "__main__":

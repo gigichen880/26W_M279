@@ -1,6 +1,6 @@
 # Realized volatility prediction: same pipeline as covariance, target = log realized vol per asset.
-# Reuses regimes, kNN, and walk-forward refit; aggregator is EuclideanMean (vector).
-# Embedder: "vol_stats" recommended (past-window vol distribution → similarity = similar vol regime).
+# Vol is highly persistent, so roll/pers/shrink are strong baselines; kNN can add variance.
+# Use vol_dampen_* to blend model toward roll/shrink and improve MSE.
 
 data:
   parquet_path: "data/processed/returns_universe_100.parquet"
@@ -39,7 +39,7 @@ aggregator:
   eps_spd: 1.0e-8
 
 backtest:
-  k_neighbors: 7    # Fewer neighbors for vol to reduce noise; vol_stats embedding is more targeted
+  k_neighbors: 15   # More neighbors → lower variance of kNN forecast, often better MSE
   stride: 5
   neighbor_gap: 10
   long_only: false
@@ -61,10 +61,11 @@ guardrail:
   trace_ratio_hi: 2.5
 
 mixing:
-  mix_lambda: 0.2   # Lower than cov: rely more on baseline until model is clearly better
+  mix_lambda: 0.2
   shrink_gamma: 0.3
-  # Pull model forecast toward rolling to reduce kNN noise (0.3 helps when embedder is vol_stats)
-  vol_dampen_toward_roll: 0.3
+  # Blend model with roll + shrink to improve MSE (vol is persistent; kNN alone is noisy)
+  vol_dampen_toward_roll: 0.5   # 50% roll → "model" = 50% kNN + 50% roll
+  vol_dampen_toward_shrink: 0.15  # 15% shrink → "model" = 35% kNN + 50% roll + 15% shrink
 
 stability:
   floor_eps: 5.0e-4

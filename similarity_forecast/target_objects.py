@@ -76,6 +76,40 @@ class CorrelationTarget:
 
 
 @dataclass(frozen=True)
+class PrecisionTarget:
+    """
+    Target = precision matrix (Sigma^{-1}) of future returns.
+    GMVP weights are w ∝ Sigma^{-1} 1, so forecasting in precision space can better
+    align with the portfolio objective and reduce error amplification from inverting a forecast.
+    """
+    ddof: int = 1
+    eps_spd: float = 1e-8
+    max_na_pct: float = 0.3
+    min_stocks_with_data_pct: float = 0.8
+
+    def target(self, future_returns: NDArray[np.floating]) -> NDArray[np.floating]:
+        if not validate_window(
+            future_returns,
+            max_na_pct=self.max_na_pct,
+            min_stocks_pct=self.min_stocks_with_data_pct,
+        ):
+            raise ValueError("PrecisionTarget.target: future window failed validation.")
+        cov = cov_from_returns(future_returns, ddof=self.ddof)
+        Sigma = project_to_spd(cov, eps=self.eps_spd)
+        # Precision = Sigma^{-1}; add small ridge so inverse is stable
+        n = Sigma.shape[0]
+        try:
+            P = np.linalg.solve(Sigma + self.eps_spd * np.eye(n), np.eye(n))
+        except np.linalg.LinAlgError:
+            P = np.linalg.pinv(Sigma)
+        P = (P + P.T) / 2.0
+        return project_to_spd(P, eps=self.eps_spd)
+
+    def postprocess(self, y_hat: NDArray[np.floating]) -> NDArray[np.floating]:
+        return project_to_spd(y_hat, eps=self.eps_spd)
+
+
+@dataclass(frozen=True)
 class VolTarget:
     """
     Realized volatility target: from future returns window, compute sample covariance,

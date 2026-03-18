@@ -59,6 +59,7 @@ from .target_objects import (
     TargetObject,
     CovarianceTarget,
     CorrelationTarget,
+    PrecisionTarget,
     VolTarget,
 )
 
@@ -116,6 +117,7 @@ __all__ = [
     "TargetObject",
     "CovarianceTarget",
     "CorrelationTarget",
+    "PrecisionTarget",
     "VolTarget",
 
     # regimes

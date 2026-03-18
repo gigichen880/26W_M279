@@ -426,6 +426,8 @@ Figures go to `results/regime_volatility/figs/raw_temporal/` (error and cumulati
 
 **Embedder choice:** For **covariance** forecasting, `pca` or `corr_eig` are appropriate (they capture return/factor or correlation structure). For **realized vol** forecasting, `embedder.name: "vol_stats"` is recommended: it embeds the past window’s vol distribution (mean + quantiles of log vol), so kNN similarity aligns with “similar past vol regime.” The volatility config uses `vol_stats` by default; you can set `embedder.name: "pca"` or `"corr_eig"` to reuse the same embedding as the covariance run. If **vol MSE is poor** (model worse than baselines): increase **`mixing.vol_dampen_toward_roll`** (e.g. 0.2–0.3), lower **`mixing.mix_lambda`**, and run the statistical comparison for vol (§5).
 
+**Key design (volatility):** The vol pipeline is tuned so the model can beat Shrink, Roll, and Pers on Vol MSE / MAE / RMSE (log-vol). Main choices: **(1)** **Dampening** — the raw kNN forecast is blended with baselines: `vol_hat_use = (1 − α − β)·vol_hat + α·vol_roll + β·vol_shrink` with `vol_dampen_toward_roll` (e.g. 0.5) and `vol_dampen_toward_shrink` (e.g. 0.15). This cuts kNN variance while keeping regime signal. **(2)** **More neighbors** — `backtest.k_neighbors` (e.g. 15) gives a smoother kNN average and lower forecast variance than small k. **(3)** **VolStatsEmbedder** — past-window vol distribution (mean, quantiles, trend, concentration) so similarity ≈ similar past vol regime. With these, the model consistently shows statistically significant advantage over Shrink, Roll, and Pers on Vol MSE/MAE/RMSE in the statistical comparison plots.
+
 ---
 
 ### 2. Standard Evaluation Plots

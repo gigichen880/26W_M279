@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import os
+import sys
 import argparse
+from pathlib import Path
 from typing import Dict, List
+
+# Ensure project root on path when run as script (e.g. python scripts/analysis/core/...)
+_root = Path(__file__).resolve().parents[2]
+if _root.name == "scripts":
+    _root = _root.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy import stats as scipy_stats
 
 from scripts.config_utils import load_yaml, deep_update, parse_overrides
 
@@ -124,6 +134,51 @@ def plot_gmvp_sharpe(df, outdir, methods, roll_window: int = 21):
     _savefig(os.path.join(outdir, "gmvp_sharpe_timeseries.png"))
 
 
+def plot_gmvp_sharpe_distribution(df, outdir, methods):
+    """Overlay KDE of per-horizon GMVP Sharpe for model vs baselines."""
+    cols = _metric_cols(df, "gmvp_sharpe", methods)
+    if not cols:
+        return
+    all_vals = []
+    series = {}
+    for m, c in cols.items():
+        s = pd.to_numeric(df[c], errors="coerce").dropna()
+        s = s[np.isfinite(s)]
+        if s.size > 1:
+            series[m] = s.values
+            all_vals.extend(s.tolist())
+    if not series or not all_vals:
+        return
+    all_arr = np.array(all_vals)
+    x_min = np.percentile(all_arr, 1)
+    x_max = np.percentile(all_arr, 99)
+    x_grid = np.linspace(x_min, x_max, 200)
+    plt.figure(figsize=(10, 5))
+    for m in methods:
+        if m not in series:
+            continue
+        vals = series[m]
+        if vals.size < 2:
+            continue
+        color = "#1f77b4" if m in ("model", "mix") else "#7f7f7f"
+        try:
+            kde = scipy_stats.gaussian_kde(vals)
+            density = kde(x_grid)
+            density = np.maximum(density, 0)
+            plt.fill_between(x_grid, density, alpha=0.35, color=color)
+            plt.plot(x_grid, density, label=m, color=color, linewidth=1.5)
+        except Exception:
+            plt.hist(vals, bins=min(40, max(10, vals.size // 5)), density=True, alpha=0.4, label=m, color=color, edgecolor="black")
+    plt.axvline(0, color="black", linestyle="--", alpha=0.6)
+    plt.xlabel("GMVP Sharpe (per horizon)")
+    plt.ylabel("Density")
+    plt.title("Distribution of GMVP Sharpe: model vs baselines (over evaluation dates)")
+    plt.legend()
+    plt.grid(alpha=0.3, axis="y")
+    plt.xlim(x_min, x_max)
+    _savefig(os.path.join(outdir, "gmvp_sharpe_distribution.png"))
+
+
 def plot_turnover_l1(df, outdir, methods, roll_window: int = 21):
     cols = _metric_cols(df, "turnover_l1", methods)
     if not cols:
@@ -170,7 +225,7 @@ def plot_cumulative_advantage(
     if ref_col not in df.columns:
         return
     ref_s = pd.to_numeric(df[ref_col], errors="coerce")
-    baselines = [m for m in methods if m != ref]
+    baselines = [m for m in methods if m in ("roll", "pers", "shrink")]
     plt.figure(figsize=(12, 4))
     for m in baselines:
         c = f"{m}_{metric}"
@@ -186,6 +241,74 @@ def plot_cumulative_advantage(
     plt.legend()
     plt.grid(alpha=0.3)
     _savefig(os.path.join(outdir, f"cumulative_advantage_{ref}_{metric}.png"))
+
+
+# Key report metrics to show: (section, metric) -> (display name, higher_is_better)
+_REPORT_KEY_METRICS = [
+    ("cov_error_mean", "fro", "Frobenius error", False),
+    ("gmvp_mean", "gmvp_mean", "GMVP return", True),
+    ("gmvp_mean", "gmvp_sharpe", "GMVP Sharpe", True),
+    ("gmvp_mean", "gmvp_var", "GMVP variance", False),
+    ("gmvp_mean", "gmvp_vol", "GMVP vol", False),
+    ("gmvp_mean", "turnover_l1", "Turnover L1", False),
+]
+
+
+def plot_report_summary(report_path: str, outdir: str) -> None:
+    """
+    Visualize report.csv: key metrics only, with (↑)/(↓) and best bar in green, worst in red.
+    Saves report_summary.png in outdir.
+    """
+    r = pd.read_csv(report_path)
+    if r.empty or "metric" not in r.columns or "method" not in r.columns or "value" not in r.columns:
+        return
+    piv = r.pivot_table(index=["section", "metric"], columns="method", values="value", aggfunc="first")
+    if piv.empty:
+        return
+    methods_order = [m for m in ["model", "mix", "roll", "pers", "shrink"] if m in piv.columns]
+    if not methods_order:
+        methods_order = piv.columns.tolist()
+    piv = piv.reindex(columns=methods_order)
+    rows = []
+    for section, metric, title, higher_is_better in _REPORT_KEY_METRICS:
+        key = (section, metric)
+        if key not in piv.index:
+            continue
+        rows.append((title, higher_is_better, piv.loc[key]))
+    if not rows:
+        return
+    n = len(rows)
+    ncols = 3
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows))
+    axes = np.atleast_1d(axes).flatten()
+    for i, (ax, (title, higher_is_better, row)) in enumerate(zip(axes, rows)):
+        vals = np.array([float(row.get(m, np.nan)) for m in methods_order])
+        valid = np.isfinite(vals)
+        if valid.any():
+            best_idx = np.nanargmax(vals) if higher_is_better else np.nanargmin(vals)
+            worst_idx = np.nanargmin(vals) if higher_is_better else np.nanargmax(vals)
+        else:
+            best_idx = worst_idx = 0
+        colors = []
+        for j in range(len(methods_order)):
+            if j == best_idx:
+                colors.append("#2e7d32")
+            elif j == worst_idx:
+                colors.append("#c62828")
+            else:
+                colors.append("#9e9e9e")
+        direction = "↑" if higher_is_better else "↓"
+        ax.bar(methods_order, vals, color=colors, alpha=0.85, edgecolor="black", linewidth=0.8)
+        ax.set_title(f"{title} ({direction})", fontsize=10, fontweight="bold")
+        ax.set_ylabel("Mean")
+        ax.tick_params(axis="x", rotation=20)
+        ax.grid(alpha=0.3, axis="y")
+    for j in range(len(rows), len(axes)):
+        axes[j].set_visible(False)
+    fig.suptitle("Report: key metrics by method (green = best, red = worst)", fontsize=12, fontweight="bold", y=1.00)
+    outpath = os.path.join(outdir, "report_summary.png")
+    _savefig(outpath)
 
 
 def main():
@@ -211,32 +334,22 @@ def main():
     plot_method_overlays(df, outdir, methods, metrics)
     plot_rolling_median(df, outdir, methods, metrics, roll_window)
     plot_gmvp_sharpe(df, outdir, methods, roll_window=roll_window)
+    plot_gmvp_sharpe_distribution(df, outdir, methods)
     plot_turnover_l1(df, outdir, methods, roll_window=roll_window)
 
     error_metric = cfg["plot"].get("error_metric", "fro")
     plot_covariance_error_timeseries(df, outdir, methods, error_metric=error_metric)
 
+    # Cumulative advantage only for the error metric (fro / vol_mse)
     cum_metric = cfg["plot"].get("cumulative_advantage_metric", error_metric)
     for ref in ("model", "mix"):
         if ref in methods:
             plot_cumulative_advantage(df, outdir, ref=ref, methods=methods, metric=cum_metric)
 
-    # Cumulative return advantage: model vs baselines, mix vs baselines (separate files, same style as other cum-adv)
-    if _metric_cols(df, "gmvp_cumret", methods):
-        for ref in ("model", "mix"):
-            if ref in methods:
-                plot_cumulative_advantage(
-                    df, outdir, ref=ref, methods=methods, metric="gmvp_cumret", higher_is_better=True
-                )
-
-    # Cumulative advantage for GMVP and turnover (easier to read than raw daily series)
-    for metric, higher in [("gmvp_sharpe", True), ("gmvp_vol", False), ("turnover_l1", False)]:
-        if _metric_cols(df, metric, methods):
-            for ref in ("model", "mix"):
-                if ref in methods:
-                    plot_cumulative_advantage(
-                        df, outdir, ref=ref, methods=methods, metric=metric, higher_is_better=higher
-                    )
+    # Report summary: visualize report.csv (mean metrics by method) as bar charts
+    report_path = os.path.join(os.path.dirname(os.path.dirname(outdir)), "report.csv")
+    if os.path.isfile(report_path):
+        plot_report_summary(report_path, outdir)
 
     print("\nSaved figures:")
     for f in SAVED_FILES:

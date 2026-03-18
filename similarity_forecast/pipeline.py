@@ -12,7 +12,7 @@ from numpy.typing import NDArray
 
 from .embeddings import WindowEmbedder
 from .target_objects import TargetObject
-from .core import ExactKNN, Aggregator, validate_window
+from .core import ExactKNN, Aggregator, validate_window, project_to_spd
 from .regimes import RegimeModel
 from .regime_weighting import RegimeAwareWeights
 
@@ -95,6 +95,10 @@ class RegimeAwareSimilarityForecaster:
     # KNN distance and regime aggregation
     knn_metric: str = "l2"              # {"l2","l1"} for neighbor search
     regime_aggregation: str = "soft"    # {"soft","hard"}: soft = alpha weights; hard = one-hot argmax(alpha)
+
+    # Output stability (improves GMVP variance / reduces extreme weights)
+    output_shrink_toward_diag: float = 0.0   # blend forecast with its diagonal; 0=off, 0.1--0.3 often helps
+    alpha_smooth_frac: float = 0.0           # blend regime alpha with uniform to reduce overconfidence; 0=off
 
     def _build_windows(self, R: NDArray[np.floating]) -> List[Tuple[int, slice, slice]]:
         """
@@ -299,6 +303,12 @@ class RegimeAwareSimilarityForecaster:
                 if not np.all(np.isfinite(alpha)) or float(np.sum(alpha)) <= self.eps:
                     alpha = pi0 if alpha_fallback == "pi" else (np.ones_like(pi0) / max(pi0.size, 1))
 
+        # Optional: smooth alpha toward uniform to reduce overconfident regime switches
+        if getattr(self, "alpha_smooth_frac", 0.0) > 0 and alpha.size > 0:
+            frac = float(getattr(self, "alpha_smooth_frac", 0.0))
+            alpha = (1.0 - frac) * alpha + frac * (np.ones_like(alpha) / alpha.size)
+            alpha = self._normalize_prob(alpha)
+
         if str(self.regime_aggregation).lower() == "hard":
             a = np.zeros_like(alpha)
             a[int(np.argmax(alpha))] = 1.0
@@ -357,6 +367,12 @@ class RegimeAwareSimilarityForecaster:
 
         yhat = np.tensordot(alpha, YK, axes=(0, 0))
         out = self.target_object.postprocess(yhat)
+        # Optional: shrink covariance toward its diagonal to stabilize inverse (better GMVP variance)
+        gamma = getattr(self, "output_shrink_toward_diag", 0.0)
+        if gamma > 0 and out.ndim == 2 and out.shape[0] == out.shape[1]:
+            diag = np.diag(np.diag(out))
+            out = (1.0 - gamma) * out + gamma * diag
+            out = project_to_spd((out + out.T) / 2.0, eps=self.eps)
         if return_regime and return_neighbors:
             return out, alpha, pi0, neighbors_info
         if return_regime:

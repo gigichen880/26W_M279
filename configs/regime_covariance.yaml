@@ -8,7 +8,7 @@ data:
   end_date: "2021-12-31"
 
 model:
-  target: "covariance" # "covariance" | "volatility"
+  target: "covariance" # "covariance" | "volatility" | "precision" (forecast Sigma^{-1}; can improve GMVP)
   lookback: 50
   horizon: 20
 
@@ -26,6 +26,10 @@ model:
 
   # stage-1/2/3 training sampling stride (controls how many anchor windows are used for fit())
   sample_stride: 3
+
+  # Pipeline stability: lower GMVP variance with minimal Sharpe drop
+  output_shrink_toward_diag: 0.18   # blend forecast with diagonal (0.15--0.25 typical)
+  alpha_smooth_frac: 0.08          # smooth regime alpha to reduce variance spikes
 
 embedder:
   name: "pca" # "pca" or "corr_eig"
@@ -72,12 +76,17 @@ guardrail:
   trace_ratio_hi: 2.0 # tighter (e.g. 2.0) → same
 
 mixing:
-  mix_lambda: 0.3 # S_mix = (1-lam) S_shrink + lam S_model
+  # Mixing for the "mix" method (covariance). Slightly more shrink → lower variance, small Sharpe cost.
+  cov_mix_weights:
+    shrink: 0.55
+    pers: 0.2
+    model: 0.25
+  mix_lambda: 0.3 # legacy: S_mix = (1-lam) S_shrink + lam S_model (used only if cov_mix_weights omitted)
   shrink_gamma: 0.3 # baseline_shrink_to_diag gamma
 
 stability:
-  floor_eps: 1.0e-3 # diagonal ridge (return^2); larger (e.g. 1e-3) → less extreme GMVP weights → often lower gmvp_vol
-  apply_floor_to: "gmvp_only" # "all" or "gmvp_only"
+  floor_eps: 1.5e-3   # slightly higher → more stable GMVP weights, lower realized variance
+  apply_floor_to: "gmvp_only"
 
 outputs:
   outdir: "results"

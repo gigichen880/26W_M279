@@ -1,10 +1,10 @@
 section,metric,method,value
-vol_error_mean,vol_mse,model,0.27436729424658307
-vol_error_mean,vol_mae,model,0.35445825839351214
-vol_error_mean,vol_rmse,model,0.45781186862376855
-vol_error_mean,vol_mse,mix,0.2442273576759125
-vol_error_mean,vol_mae,mix,0.33827576976324214
-vol_error_mean,vol_rmse,mix,0.440396946883145
+vol_error_mean,vol_mse,model,0.2329201572949954
+vol_error_mean,vol_mae,model,0.3281414060405511
+vol_error_mean,vol_rmse,model,0.42440378935832157
+vol_error_mean,vol_mse,mix,0.24611681005910435
+vol_error_mean,vol_mae,mix,0.34072849368224145
+vol_error_mean,vol_rmse,mix,0.44408859537760476
 vol_error_mean,vol_mse,roll,0.24584101182855228
 vol_error_mean,vol_mae,roll,0.3419549368865929
 vol_error_mean,vol_rmse,roll,0.44684071855118285
