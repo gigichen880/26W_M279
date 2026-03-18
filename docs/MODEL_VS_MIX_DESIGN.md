@@ -34,3 +34,20 @@
 | Volatility | Yes                                       | vol_hat_use = kNN + roll + shrink (config: 35% + 50% + 15%).         |
 
 So for **cov** the only explicit multi-method ensemble is **“mix”**. For **vol**, **“model”** already embeds a roll/shrink blend (momentum + stability); “mix” adds another layer on top of that.
+
+---
+
+## Volatility: dampening vs correlation vs performance
+
+**The tension**
+- **With dampening** (current): vol “model” beats baselines on MSE/MAE/RMSE, but forecast correlation (model vs roll/shrink/pers) is **high** → little diversification; ensembling doesn’t add much beyond what the blend already does.
+- **Without dampening** (raw kNN only): vol model **underperforms** all baselines on every metric. So “isolating” the vol model would fix correlation at the cost of worse forecasts.
+
+**Recommendation: keep dampening; don’t drop it for diversification.**
+
+1. **Dampening is for performance, not diversification.** We blend with roll/shrink because vol is persistent and kNN alone is noisy. The goal is **better MSE**, not uncorrelated errors. High correlation after dampening is expected: we made the forecast look more like roll/shrink on purpose.
+2. **Don’t remove dampening in production** just to get lower correlation. That would give you a “purer” model but worse realized accuracy. The right framing is: *we blend for stability/performance; we do not rely on ensemble diversification for vol.*
+3. **No need to add more ensemble.** High correlation means further combining model with baselines (e.g. fancier mix weights) won’t diversify error risk. The current “model” (with dampening) and “mix” are enough; no need to push ensembling further.
+4. **Optional diagnostic (once).** If you want to *see* whether raw kNN is less correlated with baselines: set `vol_dampen_toward_roll: 0` and `vol_dampen_toward_shrink: 0`, re-run the vol backtest, then run the forecast-correlation script. You’ll likely see lower correlation (model vs roll/shrink) but worse metrics. That documents the tradeoff and justifies keeping dampening for the main results.
+
+**Bottom line:** Keep the current vol setup. Treat dampening as **stability/performance blending**, not as diversification. Report high correlation as “forecasts move together; ensembling does not materially diversify error risk,” and avoid over-selling ensemble benefits. Optional: one run with dampening off to document the correlation/performance tradeoff in the appendix or supplement.

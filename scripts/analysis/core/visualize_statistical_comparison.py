@@ -39,13 +39,15 @@ def _cov_config():
 
 def _vol_config():
     return {
-        "metrics": ("vol_mse", "vol_mae", "vol_rmse"),
-        "key_metrics_plot": ["vol_mse", "vol_mae", "vol_rmse"],
-        "lower_is_better": {"vol_mse", "vol_mae", "vol_rmse"},
+        "metrics": ("vol_mse", "vol_mae", "vol_rmse", "vol_qlike", "vol_r2"),
+        "key_metrics_plot": ["vol_mse", "vol_mae", "vol_rmse", "vol_qlike", "vol_r2"],
+        "lower_is_better": {"vol_mse", "vol_mae", "vol_rmse", "vol_qlike"},
         "metric_labels": {
             "vol_mse": "Vol MSE (log-vol)\n(lower is better)",
             "vol_mae": "Vol MAE (log-vol)\n(lower is better)",
             "vol_rmse": "Vol RMSE (log-vol)\n(lower is better)",
+            "vol_qlike": "QLIKE (Quasi-Likelihood)\n(lower is better)",
+            "vol_r2": "R² (variance explained)\n(higher is better)",
         },
         "out_subdir": "regime_volatility/figs/statistical_comparison",
     }
@@ -203,6 +205,7 @@ def plot_statistical_comparison(
             zorder=1,
             vert=False,
         )
+        # Color by median difference (aligns with Wilcoxon test)
         for i, patch in enumerate(bp["boxes"]):
             med = np.median(diffs_list[i])
             patch.set_facecolor(color_better if med > 0 else color_worse)
@@ -224,16 +227,17 @@ def plot_statistical_comparison(
         x_min, x_max = np.nanpercentile(all_diffs, [1, 99])
         x_span = max(abs(x_min), abs(x_max), 1e-12) * 1.15
         ax.set_xlim(-x_span, x_span)
+        # Annotate with median difference and Wilcoxon signed-rank test (median-based)
         for g, baseline in enumerate(present_baselines):
-            row = df_plot[(df_plot["metric"] == metric) & (df_plot["baseline"] == baseline)]
-            if row.empty:
-                continue
-            row = row.iloc[0]
-            t_val = row.get("t_statistic", np.nan)
-            p_val = row.get("p_value", np.nan)
-            sig = _sig_marker(p_val)
-            t_str = f"t = {t_val:.2f}{sig}" if np.isfinite(t_val) else "t = —"
-            ax.text(x_span * 0.97, g, " " + t_str, ha="right", va="center", fontsize=9)
+            diff = diffs_list[g]
+            med = float(np.median(diff))
+            try:
+                w_stat, w_p = stats.wilcoxon(diff)
+                sig = _sig_marker(w_p)
+            except Exception:
+                w_p, sig = np.nan, ""
+            ann = f"Δ̃ = {med:.3f}{sig}" if np.isfinite(med) else "Δ̃ = —"
+            ax.text(x_span * 0.97, g, " " + ann, ha="right", va="center", fontsize=9)
         ax.grid(axis="x", alpha=0.3)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -249,7 +253,7 @@ def plot_statistical_comparison(
         fontweight="bold",
         y=0.96,
     )
-    fig.text(0.5, 0.01, "Paired t-test on daily outcomes. t = test statistic; *** p<0.01, ** p<0.05, * p<0.10.", ha="center", fontsize=9, style="italic")
+    fig.text(0.5, 0.01, "Box = distribution of daily differences. Color and Δ̃ = median. Wilcoxon signed-rank test; *** p<0.01, ** p<0.05, * p<0.10.", ha="center", fontsize=9, style="italic")
     plt.tight_layout(rect=[0, 0.02, 1, 0.94])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=300, bbox_inches="tight")

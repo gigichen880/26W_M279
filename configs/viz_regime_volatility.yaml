@@ -17,6 +17,8 @@ plot:
     - vol_mse
     - vol_mae
     - vol_rmse
+    - vol_qlike
+    - vol_r2
   error_metric: "vol_mse"
   cumulative_advantage_metric: "vol_mse"
   heavy_pos_metrics: []

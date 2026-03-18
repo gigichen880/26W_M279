@@ -28,7 +28,7 @@ model:
   sample_stride: 3
 
   # Pipeline stability: lower GMVP variance with minimal Sharpe drop. No blend with roll/shrink (see docs/MODEL_VS_MIX_DESIGN.md).
-  output_shrink_toward_diag: 0.18   # blend forecast with diagonal (0.15--0.25 typical)
+  output_shrink_toward_diag: 0.12   # reduced from 0.18 so model is more distinct from shrink → better model vs shrink
   alpha_smooth_frac: 0.08          # smooth regime alpha to reduce variance spikes
 
 embedder:
@@ -72,8 +72,8 @@ internals:
   min_samples_for_gmm: 50
 
 guardrail:
-  trace_ratio_lo: 0.6 # tighter (e.g. 0.6) → model uses shrink more often → lower gmvp_vol
-  trace_ratio_hi: 2.0 # tighter (e.g. 2.0) → same
+  trace_ratio_lo: 0.5  # relaxed so model is used more often (was 0.6) → better model vs shrink on GMVP
+  trace_ratio_hi: 2.5  # relaxed (was 2.0)
 
 mixing:
   # Mixing for the "mix" method (covariance). Slightly more shrink → lower variance, small Sharpe cost.

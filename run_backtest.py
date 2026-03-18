@@ -100,6 +100,28 @@ def _mix_cov_multi(
     return project_to_spd((S + S.T) / 2.0, eps=proj_eps)
 
 
+def rescale_covariance_trace(
+    S_hat: np.ndarray, S_ref: np.ndarray, lo: float, hi: float
+) -> np.ndarray:
+    """
+    Rescale S_hat so trace(S_hat)/trace(S_ref) lies in [lo, hi]. Preserves correlation
+    structure; only fixes scale so the guardrail does not replace the model with shrink.
+    Returns S_hat unchanged if ref is invalid or ratio already in range.
+    """
+    lo, hi = float(lo), float(hi)
+    tr_hat = float(np.trace(S_hat))
+    tr_ref = float(np.trace(S_ref))
+    if tr_ref <= 0 or not np.isfinite(tr_ref) or tr_hat <= 0 or not np.isfinite(tr_hat):
+        return S_hat
+    r = tr_hat / tr_ref
+    if np.isfinite(r) and lo <= r <= hi:
+        return S_hat
+    target_r = np.clip(r, lo, hi)
+    scale = target_r / r
+    out = S_hat * scale
+    return (out + out.T) / 2.0
+
+
 def trace_ratio_guardrail(S_hat: np.ndarray, S_ref: np.ndarray, lo: float, hi: float) -> tuple[bool, float]:
     """
     Returns (triggered, ratio). Triggered when ratio outside [lo, hi] or invalid.
@@ -528,8 +550,10 @@ def run_backtest(
         S_shrink = project_to_spd((S_shrink + S_shrink.T) / 2.0, eps=1e-8)
 
         # ----------------------------
-        # (5) Guardrail on model Sigma_hat
+        # (5) Trace rescale then guardrail on model Sigma_hat
+        # Rescale so trace is in [lo, hi] relative to S_roll; then guardrail only for invalid/NaN.
         # ----------------------------
+        Sigma_hat = rescale_covariance_trace(Sigma_hat, S_roll, float(trace_ratio_lo), float(trace_ratio_hi))
         bad, ratio = trace_ratio_guardrail(Sigma_hat, S_roll, lo=float(trace_ratio_lo), hi=float(trace_ratio_hi))
         Sigma_hat_use = S_shrink if bad else Sigma_hat
 
@@ -673,8 +697,9 @@ def build_report_table(results_df: pd.DataFrame, target_type: str = "covariance"
     methods = ["model", "mix", "roll", "pers", "shrink"]
 
     if target_type == "volatility":
+        vol_keys = ("vol_mse", "vol_mae", "vol_rmse", "vol_qlike", "vol_r2")
         for m in methods:
-            for key in ("vol_mse", "vol_mae", "vol_rmse"):
+            for key in vol_keys:
                 col = f"{m}_{key}"
                 if col in results_df.columns:
                     add("vol_error_mean", key, m, results_df[col].mean())
@@ -905,6 +930,19 @@ def main():
     report_path = os.path.join(tag_dir, "report.csv")
     report_df.to_csv(report_path, index=False)
     print(f"Saved report summary: {report_path}")
+
+    # Covariance: write guardrail diagnostic so we can see why model ≈ shrink on GMVP
+    if target_type == "covariance" and "guardrail_triggered" in results.columns:
+        pct = results["guardrail_triggered"].astype(float).mean() * 100.0
+        ratio_mean = results["guardrail_trace_ratio"].mean() if "guardrail_trace_ratio" in results.columns else None
+        stats = {"pct_guardrail_triggered": round(pct, 2), "n_days": int(len(results))}
+        if ratio_mean is not None and np.isfinite(ratio_mean):
+            stats["guardrail_trace_ratio_mean"] = float(ratio_mean)
+        import json
+        guardrail_path = os.path.join(tag_dir, "guardrail_stats.json")
+        with open(guardrail_path, "w") as f:
+            json.dump(stats, f, indent=2)
+        print(f"Guardrail: {pct:.1f}% of days used shrink (model replaced). Saved: {guardrail_path}")
 
 
 if __name__ == "__main__":

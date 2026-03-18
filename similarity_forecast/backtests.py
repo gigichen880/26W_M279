@@ -260,11 +260,14 @@ def baseline_shrink_vol_toward_cs_mean(
 
 
 def eval_vol_metrics(
-    vol_hat: NDArray[np.floating], vol_true: NDArray[np.floating]
+    vol_hat: NDArray[np.floating], vol_true: NDArray[np.floating], eps: float = 1e-12
 ) -> dict[str, float]:
     """
     Scalar metrics for log-vol prediction (vector vs vector).
-    Lower is better for all.
+    vol_hat, vol_true are log(σ); variance σ² = exp(2*log_σ).
+    - vol_mse, vol_mae, vol_rmse: lower is better.
+    - vol_qlike: QLIKE = mean(log(σ̂²) + σ²/σ̂²); lower is better.
+    - vol_r2: R² = 1 - SS_res/SST (variance explained); higher is better.
     """
     vh = np.asarray(vol_hat, dtype=float).reshape(-1)
     vt = np.asarray(vol_true, dtype=float).reshape(-1)
@@ -274,7 +277,25 @@ def eval_vol_metrics(
     mse = float(np.nanmean(diff ** 2))
     mae = float(np.nanmean(np.abs(diff)))
     rmse = float(np.sqrt(mse)) if np.isfinite(mse) else np.nan
-    return {"vol_mse": mse, "vol_mae": mae, "vol_rmse": rmse}
+
+    # QLIKE: log(σ̂²) + σ²/σ̂² with σ² = exp(2*log_vol). Per-asset then mean.
+    var_hat = np.exp(2.0 * vh)
+    var_true = np.exp(2.0 * vt)
+    var_hat_safe = np.maximum(var_hat, eps)
+    qlike_per = np.log(var_hat_safe) + var_true / var_hat_safe
+    qlike_per = np.where(np.isfinite(qlike_per), qlike_per, np.nan)
+    vol_qlike = float(np.nanmean(qlike_per)) if np.any(np.isfinite(qlike_per)) else np.nan
+
+    # R² = 1 - SS_res / SST; SS_res = sum((y - ŷ)²), SST = sum((y - ȳ)²). Higher is better.
+    ss_res = np.nansum(diff ** 2)
+    vt_mean = np.nanmean(vt)
+    sst = np.nansum((vt - vt_mean) ** 2)
+    if sst > 0 and np.isfinite(ss_res):
+        vol_r2 = float(1.0 - ss_res / sst)
+    else:
+        vol_r2 = np.nan
+
+    return {"vol_mse": mse, "vol_mae": mae, "vol_rmse": rmse, "vol_qlike": vol_qlike, "vol_r2": vol_r2}
 
 
 def eval_all_metrics(

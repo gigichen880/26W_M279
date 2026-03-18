@@ -19,7 +19,7 @@ model:
   gmm_n_init: 10
   ddof: 1
   sample_stride: 3
-  output_shrink_toward_diag: 0.18
+  output_shrink_toward_diag: 0.12
   alpha_smooth_frac: 0.08
 embedder:
   name: pca
@@ -47,8 +47,8 @@ internals:
   burn_in: 252
   min_samples_for_gmm: 50
 guardrail:
-  trace_ratio_lo: 0.6
-  trace_ratio_hi: 2.0
+  trace_ratio_lo: 0.5
+  trace_ratio_hi: 2.5
 mixing:
   cov_mix_weights:
     shrink: 0.55
