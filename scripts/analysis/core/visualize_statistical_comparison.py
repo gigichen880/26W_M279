@@ -21,14 +21,13 @@ DEFAULT_BACKTEST_VOL = resolve_backtest_path("regime_volatility")
 
 def _cov_config():
     return {
-        "metrics": ("fro", "stein", "kl", "gmvp_mean", "gmvp_sharpe", "gmvp_var", "turnover_l1"),
-        "key_metrics_plot": ["fro", "stein", "kl", "gmvp_mean", "gmvp_sharpe", "gmvp_var", "turnover_l1"],
+        "metrics": ("fro", "stein", "kl", "gmvp_sharpe", "gmvp_var", "turnover_l1"),
+        "key_metrics_plot": ["fro", "stein", "kl", "gmvp_sharpe", "gmvp_var", "turnover_l1"],
         "lower_is_better": {"fro", "logeuc", "kl", "stein", "nll", "gmvp_var", "gmvp_vol", "turnover_l1"},
         "metric_labels": {
             "fro": "Frobenius Error\n(lower is better)",
             "stein": "Stein Loss\n(lower is better)",
             "kl": "Gaussian KL Divergence\n(lower is better)",
-            "gmvp_mean": "GMVP Mean Return\n(higher is better)",
             "gmvp_sharpe": "GMVP Sharpe\n(higher is better)",
             "gmvp_var": "GMVP Variance\n(lower is better)",
             "turnover_l1": "Turnover L1\n(lower is better)",
@@ -142,6 +141,88 @@ def _sig_marker(p: float) -> str:
     if p < 0.10:
         return "*"
     return ""
+
+def plot_mean_advantage_bars(
+    results_df: pd.DataFrame,
+    out_path: Path,
+    *,
+    key_metrics_plot: list,
+    metric_labels: dict,
+    lower_is_better: set,
+) -> None:
+    """
+    Old-style summary: per metric, horizontal bars of mean paired advantage.
+    Advantage is normalized so positive always means reference is better.
+    Annotate with t-statistic and significance marker from paired t-test.
+    """
+    if results_df.empty:
+        return
+    df_plot = results_df[results_df["metric"].isin(key_metrics_plot)].copy()
+    if df_plot.empty:
+        return
+    reference = str(df_plot["reference"].iloc[0])
+    baselines_order = ["shrink", "roll", "pers"]
+    color_better = "#2e7d32"
+    color_worse = "#c62828"
+
+    n_metrics = len(key_metrics_plot)
+    fig, axes = plt.subplots(n_metrics, 1, figsize=(12, max(5, 2.2 * n_metrics)))
+    if n_metrics == 1:
+        axes = [axes]
+
+    for i, metric in enumerate(key_metrics_plot):
+        ax = axes[i]
+        sub = df_plot[df_plot["metric"] == metric].copy()
+        if sub.empty:
+            ax.set_visible(False)
+            continue
+        # enforce baseline order if present
+        sub["baseline"] = sub["baseline"].astype(str)
+        sub["baseline_rank"] = sub["baseline"].map({b: j for j, b in enumerate(baselines_order)}).fillna(999)
+        sub = sub.sort_values("baseline_rank")
+
+        # normalize mean diff so positive = reference better
+        raw = pd.to_numeric(sub["mean_diff"], errors="coerce").values
+        higher_better = metric not in lower_is_better
+        adv = raw if higher_better else -raw
+
+        y = np.arange(len(sub))
+        colors = [color_better if (np.isfinite(a) and a > 0) else color_worse for a in adv]
+        ax.barh(y, adv, color=colors, alpha=0.85, edgecolor="black", linewidth=0.7)
+        ax.axvline(0, color="black", linestyle="--", linewidth=1)
+        ax.set_yticks(y)
+        ax.set_yticklabels([b.capitalize() for b in sub["baseline"].tolist()])
+
+        title = metric_labels.get(metric, metric)
+        ax.set_title(title, fontsize=10, fontweight="bold")
+        ax.set_xlabel(f"{reference.capitalize()} advantage (mean; + = better)")
+        ax.grid(axis="x", alpha=0.25)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        # annotate with t-stat and sig marker
+        for yy, (_, r) in zip(y, sub.iterrows()):
+            t = r.get("t_statistic", np.nan)
+            p = r.get("p_value", np.nan)
+            sig = _sig_marker(float(p)) if np.isfinite(p) else ""
+            if np.isfinite(t):
+                txt = f"t={float(t):.2f}{sig}"
+                # place to the right of bar end (or slightly right of zero)
+                x_txt = float(adv[yy]) if np.isfinite(adv[yy]) else 0.0
+                pad = 0.01 * (np.nanmax(np.abs(adv)) if np.isfinite(np.nanmax(np.abs(adv))) else 1.0)
+                ax.text(x_txt + (pad if x_txt >= 0 else -pad), yy, txt,
+                        va="center", ha="left" if x_txt >= 0 else "right", fontsize=9)
+
+    fig.suptitle(
+        f"Statistical Comparison (mean advantage): {reference.capitalize()} vs baselines",
+        fontsize=12,
+        fontweight="bold",
+        y=0.98,
+    )
+    plt.tight_layout(rect=[0, 0.02, 1, 0.96])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_statistical_comparison(
@@ -327,8 +408,10 @@ def main():
     lower = config["lower_is_better"]
     model_results = compare_vs_reference(df, reference="model", baselines=("roll", "pers", "shrink"), metrics=metrics)
     plot_statistical_comparison(model_results, df, out_dir / "model_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+    plot_mean_advantage_bars(model_results, out_dir / "model_vs_baselines_meanbars.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
     mix_results = compare_vs_reference(df, reference="mix", baselines=("roll", "pers", "shrink"), metrics=metrics)
     plot_statistical_comparison(mix_results, df, out_dir / "mix_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+    plot_mean_advantage_bars(mix_results, out_dir / "mix_vs_baselines_meanbars.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
     target_resolved = "volatility" if "model_vol_mse" in df.columns else "covariance"
     plot_forecast_correlation(df, out_dir, target=target_resolved)
 

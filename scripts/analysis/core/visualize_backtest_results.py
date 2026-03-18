@@ -246,7 +246,6 @@ def plot_cumulative_advantage(
 # Key report metrics to show: (section, metric) -> (display name, higher_is_better)
 _REPORT_KEY_METRICS = [
     ("cov_error_mean", "fro", "Frobenius error", False),
-    ("gmvp_mean", "gmvp_mean", "GMVP return", True),
     ("gmvp_mean", "gmvp_sharpe", "GMVP Sharpe", True),
     ("gmvp_mean", "gmvp_var", "GMVP variance", False),
     ("gmvp_mean", "gmvp_vol", "GMVP vol", False),

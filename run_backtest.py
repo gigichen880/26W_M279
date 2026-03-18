@@ -803,7 +803,6 @@ def build_report_table(results_df: pd.DataFrame, target_type: str = "covariance"
         add("cov_error_mean", "kl", m, results_df[f"{m}_kl"].mean())
         add("cov_error_mean", "stein", m, results_df[f"{m}_stein"].mean())
         add("cov_error_mean", "logeuc", m, results_df[f"{m}_logeuc"].mean())
-        add("gmvp_mean", "gmvp_mean", m, results_df[f"{m}_gmvp_mean"].mean())
         add("gmvp_mean", "gmvp_var", m, results_df[f"{m}_gmvp_var"].mean())
         add("gmvp_mean", "gmvp_vol", m, results_df[f"{m}_gmvp_vol"].mean())
         add("gmvp_mean", "gmvp_sharpe", m, results_df[f"{m}_gmvp_sharpe"].mean())
