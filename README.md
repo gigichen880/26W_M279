@@ -398,6 +398,7 @@ Two dedicated ablations isolate **which part of the pipeline** you are changing:
 | -------- | -------------- | ----------- | --------------------- |
 | **kNN / embedding distance** | Stage 4 — nearest neighbors in embedding space | `model.knn_metric` (and `model.knn_lp_p` when metric is `lp`) | Chooses how distance \(d(z_t, z_i)\) is computed before the kernel \(\kappa_i = \exp(-d_i/\tau)\). Choices include `l2`, `l1`, `cosine`, `angular`, `chebyshev`, and labeled Lp runs `lp_p1`…`lp_p4` (`knn_metric: lp` + integer `knn_lp_p`). **`model.tau`** is not swept by default; distance scales differ by metric. |
 | **Regime clustering** | Stage 2 — soft regime memberships \(\pi_t(k)\) on training embeddings | `model.regime_clustering.name` and `model.regime_clustering.params` | Selects the backend (`gmm`, `kmeans_soft`, `spectral_rbf`, `spectral_knn`, `agglomerative_ward`, `fuzzy_cmeans`, `modified_two_stage`, `signed_knn_spectral`). **`params`** holds method-specific hyperparameters (e.g. `fuzziness` for fuzzy c-means, `n_neighbors` for spectral KNN). **`model.n_regimes`** and **`model.random_state`** always come from the top-level `model:` block, not from `regime_clustering`. |
+| **PCA dimension** | Stage 1 — width of the PCA window embedding | `embedder.pca_k` (with `embedder.name: pca`) | Number of components \(D\) in `PCAWindowEmbedder`. Sweep with [§4e](#4e-pca-embedding-dimension-pca_k); pick \(D\) by validation metrics (Fro, Sharpe, turnover) jointly. |
 
 **Shared ablation YAML mechanics** (both sweeps): `base_config` loads a full run config; `overrides` is merged for every run (shorter dates, stride, refit cadence); `mode: one_at_a_time` runs one choice per axis while holding the rest at base values.
 
@@ -405,6 +406,7 @@ Two dedicated ablations isolate **which part of the pipeline** you are changing:
 
 - **Distance only:** [§4c — kNN embedding distance ablation](#4c-knn-embedding-distance-ablation) — configs [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml), [`configs/ablation_volatility.yaml`](configs/ablation_volatility.yaml); optional model-only figure via `plot_knn_metric_ablation`.
 - **Clustering only:** [§4d — Regime clustering method ablation](#4d-regime-clustering-method-ablation) — `python -m scripts.analysis.ablation.run_regime_clustering_ablation` or [`configs/ablation_regime_clustering.yaml`](configs/ablation_regime_clustering.yaml); table of per-method `params` used in the default sweep.
+- **PCA \(D\):** [§4e — `pca_k` ablation](#4e-pca-embedding-dimension-pca_k) — `python -m scripts.analysis.ablation.run_pca_k_ablation` or [`configs/ablation_pca_k.yaml`](configs/ablation_pca_k.yaml).
 - **Full design grid** (embedder, transition, distance, regime aggregation/weighting): [§4b](#4b-pipeline-design-ablation-one-axis-at-a-time).
 
 ### 1. Main Backtest (Walk-Forward Evaluation)
@@ -666,6 +668,34 @@ python -m scripts.analysis.ablation.run_ablation --config configs/ablation_regim
 
 ---
 
+### 4e. PCA embedding dimension (`pca_k`)
+
+Sweep **Stage 1** width \(D =\) `embedder.pca_k` while fixing `embedder.name: pca` and the rest of the stack (from [`configs/regime_covariance.yaml`](configs/regime_covariance.yaml) plus the same **short-window overrides** as other ablations: 2015–2021, stride 5, refit every 20 days).
+
+| YAML / axis | Meaning |
+| ----------- | ------- |
+| `axes.pca_k.key` | `embedder.pca_k` — number of PCA components per window embedding. |
+| `overrides.embedder.name` | Locked to `pca` so the sweep does not switch to `corr_eig`. |
+
+**Run (recommended):**
+
+```bash
+python -m scripts.analysis.ablation.run_pca_k_ablation
+python -m scripts.analysis.ablation.run_pca_k_ablation --plots none --verbose   # faster: no ablation_summary.png / per-axis bars
+```
+
+**Alternative:** `python -m scripts.analysis.ablation.run_ablation --config configs/ablation_pca_k.yaml` (writes under `outputs.outdir` in the YAML; base config path is relative to the YAML file’s directory — use the runner above if the spec is copied under `results/`).
+
+**Interpretation:** `ablation_summary.csv` reports `model_mean` / `mix_mean` (mean Frobenius error) plus GMVP and turnover columns. The runner prints the **lowest `model_mean` Fro** choice; for a multi-objective pick (e.g. Fro vs turnover), use the CSV and [`plot_pca_k_ablation`](scripts/analysis/ablation/plot_pca_k_ablation.py) together.
+
+**Outputs:**
+
+- `results/regime_covariance/ablation_pca_k/ablation_summary.csv`
+- `results/regime_covariance/ablation_pca_k/figs/pca_k_ablation_model_only.png` (model-only four-panel bars)
+- `results/regime_covariance/ablation_pca_k/runs/pca_k/<k>/` — per-`k` backtest series
+
+---
+
 ### 5. Statistical Comparison
 
 Compare model/mix vs baselines with paired t-tests (same script for covariance and volatility):
@@ -680,9 +710,14 @@ python -m scripts.analysis.core.visualize_statistical_comparison --input results
 
 **Outputs:**
 
-- `results/regime_covariance/figs/statistical_comparison/model_vs_baselines.png`, `mix_vs_baselines.png` (cov)
-- `results/regime_volatility/figs/statistical_comparison/model_vs_baselines.png`, `mix_vs_baselines.png` (vol)
-- Green = reference better than baseline; red = worse; ** / \*** = significance at 5% / 1%
+- `results/regime_covariance/figs/statistical_comparison/model_vs_baselines.png`, `mix_vs_baselines.png` (cov) — boxplots of daily paired differences (Wilcoxon / median Δ̃ on figure)
+- Same paths under `regime_volatility/...` for vol backtests
+- `*_meanbars.png` — horizontal **mean** paired-advantage bars (+ = reference better) with paired **t**-stat and significance (`*`, `**`, `***`)
+- `forecast_correlation.png` and `forecast_correlation.csv` — correlation of model vs baselines on the primary metric (Fro for cov, vol MSE for vol)
+
+Choose figures with `--plots all` (default), or e.g. `--plots meanbars`, `--plots box meanbars`, `--plots correlation`.
+
+- Green = reference better than baseline; red = worse (boxplots use median difference; meanbars use mean difference)
 
 ---
 
@@ -763,6 +798,7 @@ After running complete pipeline:
 - `results/regime_covariance/comprehensive_baseline_comparison.csv` - Full baseline comparison
 - `results/regime_covariance/ablation/ablation_summary.csv` - Design ablation summary (includes kNN distance axis when using `ablation_covariance.yaml`)
 - `results/regime_covariance/ablation_regime_clustering/ablation_summary.csv` - Regime clustering method ablation
+- `results/regime_covariance/ablation_pca_k/ablation_summary.csv` - PCA embedding dimension (`pca_k`) ablation
 
 **Key Figures (covariance example, all under `results/regime_covariance/figs/`):**
 

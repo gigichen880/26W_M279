@@ -23,15 +23,15 @@ model:
 
   # Regime assignment on embeddings (Stage 2). Omit or omit `name` to use GMM with gmm_init_params / gmm_n_init above.
   # n_regimes and random_state always come from this `model:` block (not inside regime_clustering).
-  #
-  # regime_clustering:
-  #   name: fuzzy_cmeans   # needs: pip install scikit-fuzzy
-  #   params:
-  #     fuzziness: 2.0      # m in fuzzy c-means (default 2)
-  #     max_iter: 300
-  #     error: 1.0e-5       # convergence tolerance (skfuzzy `error`)
-  #     eps: 1.0e-12        # row-normalization floor for PI
-  #
+
+  regime_clustering:
+    name: fuzzy_cmeans # needs: pip install scikit-fuzzy
+    params:
+      fuzziness: 2.0 # m in fuzzy c-means (default 2)
+      max_iter: 300
+      error: 1.0e-5 # convergence tolerance (skfuzzy `error`)
+      eps: 1.0e-12 # row-normalization floor for PI
+
   # Other runnable names + useful params (all under params:):
   #   gmm — covariance_type, reg_covar, max_iter, tol, gmm_init_params, gmm_n_init, eps
   #   kmeans_soft — n_init, max_iter, temperature, eps
@@ -61,7 +61,7 @@ embedder:
   name: "pca" # "pca" or "corr_eig"
 
   # PCA embedder params
-  pca_k: 24
+  pca_k: 48
 
   # Corr-eig embedder params
   k_eigs: 32

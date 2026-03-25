@@ -1,0 +1,42 @@
+# Walk-forward ablation: PCA embedding dimension D = embedder.pca_k (Stage 1).
+# Holds the rest of the stack fixed (from base_config + overrides).
+#
+# Run (from repo root):
+#   python -m scripts.analysis.ablation.run_pca_k_ablation
+#   python -m scripts.analysis.ablation.run_pca_k_ablation --plots all --verbose
+#
+# Or directly:
+#   python -m scripts.analysis.ablation.run_ablation --config configs/ablation_pca_k.yaml
+
+base_config: "regime_covariance.yaml"
+
+mode: one_at_a_time
+
+overrides:
+  # Ensure we are varying PCA width, not switching embedder family.
+  embedder:
+    name: pca
+  data:
+    start_date: "2015-01-01"
+    end_date: "2021-12-31"
+  backtest:
+    stride: 5
+    refit_mode: "days"
+    refit_every_days: 20
+
+axes:
+  pca_k:
+    key: embedder.pca_k
+    choices:
+      - 6
+      - 8
+      - 12
+      - 16
+      - 20
+      - 24
+      - 32
+      - 40
+      - 48
+
+outputs:
+  outdir: "results/regime_covariance/ablation_pca_k"

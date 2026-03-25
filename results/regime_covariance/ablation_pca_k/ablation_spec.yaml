@@ -1,0 +1,27 @@
+base_config: /Users/zhiyichen/Desktop/26W_M279/configs/regime_covariance.yaml
+mode: one_at_a_time
+overrides:
+  embedder:
+    name: pca
+  data:
+    start_date: '2015-01-01'
+    end_date: '2021-12-31'
+  backtest:
+    stride: 5
+    refit_mode: days
+    refit_every_days: 20
+axes:
+  pca_k:
+    key: embedder.pca_k
+    choices:
+    - 6
+    - 8
+    - 12
+    - 16
+    - 20
+    - 24
+    - 32
+    - 40
+    - 48
+outputs:
+  outdir: /Users/zhiyichen/Desktop/26W_M279/results/regime_covariance/ablation_pca_k

@@ -10,6 +10,7 @@ Records summary metrics (primary metric mean for model/mix and GMVP metrics for 
 
 Use to isolate or tune:
   - embedder (pca, corr_eig, vol_stats for vol)
+  - embedder.pca_k (PCA dimension D; see configs/ablation_pca_k.yaml / run_pca_k_ablation.py)
   - transition_estimator (hard vs soft)
   - knn_metric (scalars or dict choices to set model.knn_metric + model.knn_lp_p together)
   - regime_aggregation (soft vs hard)

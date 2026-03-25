@@ -1,5 +1,11 @@
 """
-Implementation moved from scripts/analysis/visualize_statistical_comparison.py
+Paired statistical comparison vs baselines (roll, pers, shrink).
+
+Writes under results/<tag>/figs/statistical_comparison/:
+  - model_vs_baselines.png, mix_vs_baselines.png — boxplots of daily paired differences
+  - model_vs_baselines_meanbars.png, mix_vs_baselines_meanbars.png — horizontal bars of
+    mean paired advantage (+ = reference better), with paired t-stat and significance
+  - forecast_correlation.png (+ .csv) — correlation of model/baseline metric series
 """
 
 from pathlib import Path
@@ -398,7 +404,18 @@ def main():
     ap = argparse.ArgumentParser(description="Statistical comparison (paired t-tests) for cov or vol backtest")
     ap.add_argument("--input", default=None, help="Backtest parquet or CSV (default: auto-detect cov/vol)")
     ap.add_argument("--target", default="auto", choices=("auto", "covariance", "volatility"), help="Target type for metrics; auto = infer from columns")
+    ap.add_argument(
+        "--plots",
+        nargs="+",
+        choices=("all", "box", "meanbars", "correlation"),
+        default=["all"],
+        help="Figures to write (default: all). E.g. --plots meanbars or --plots box meanbars",
+    )
     args = ap.parse_args()
+    want = set(args.plots)
+    if "all" in want:
+        want = {"box", "meanbars", "correlation"}
+
     df = load_backtest_results(path=args.input)
     config = get_target_config(args.target, df)
     out_dir = RESULTS_DIR / config["out_subdir"]
@@ -406,14 +423,42 @@ def main():
     key_metrics = config["key_metrics_plot"]
     labels = config["metric_labels"]
     lower = config["lower_is_better"]
+    saved: list[Path] = []
+
     model_results = compare_vs_reference(df, reference="model", baselines=("roll", "pers", "shrink"), metrics=metrics)
-    plot_statistical_comparison(model_results, df, out_dir / "model_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
-    plot_mean_advantage_bars(model_results, out_dir / "model_vs_baselines_meanbars.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+    if "box" in want:
+        p = out_dir / "model_vs_baselines.png"
+        plot_statistical_comparison(model_results, df, p, key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+        if p.exists():
+            saved.append(p)
+    if "meanbars" in want:
+        p = out_dir / "model_vs_baselines_meanbars.png"
+        plot_mean_advantage_bars(model_results, p, key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+        if p.exists():
+            saved.append(p)
+
     mix_results = compare_vs_reference(df, reference="mix", baselines=("roll", "pers", "shrink"), metrics=metrics)
-    plot_statistical_comparison(mix_results, df, out_dir / "mix_vs_baselines.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
-    plot_mean_advantage_bars(mix_results, out_dir / "mix_vs_baselines_meanbars.png", key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+    if "box" in want:
+        p = out_dir / "mix_vs_baselines.png"
+        plot_statistical_comparison(mix_results, df, p, key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+        if p.exists():
+            saved.append(p)
+    if "meanbars" in want:
+        p = out_dir / "mix_vs_baselines_meanbars.png"
+        plot_mean_advantage_bars(mix_results, p, key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)
+        if p.exists():
+            saved.append(p)
+
     target_resolved = "volatility" if "model_vol_mse" in df.columns else "covariance"
-    plot_forecast_correlation(df, out_dir, target=target_resolved)
+    if "correlation" in want:
+        plot_forecast_correlation(df, out_dir, target=target_resolved)
+        for name in ("forecast_correlation.png", "forecast_correlation.csv"):
+            q = out_dir / name
+            if q.exists():
+                saved.append(q)
+
+    for p in saved:
+        print(f"Saved {p}")
 
 
 if __name__ == "__main__":
