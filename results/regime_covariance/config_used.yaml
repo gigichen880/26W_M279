@@ -32,7 +32,7 @@ model:
   alpha_smooth_frac: 0.08
 embedder:
   name: pca
-  pca_k: 24
+  pca_k: 48
   k_eigs: 32
   max_window_na_pct: 0.3
   min_stocks_with_data_pct: 0.8

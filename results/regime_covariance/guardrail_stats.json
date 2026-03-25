@@ -1,13 +1,13 @@
 {
   "pct_guardrail_triggered": 0.0,
   "n_days": 662,
-  "guardrail_trace_ratio_mean": 0.8446298548744914,
+  "guardrail_trace_ratio_mean": 2.326332147301909,
   "guardrail_trigger_reason_counts": {
     "": 662
   },
   "guardrail_mode": "invalid_only",
   "pct_model_blended_to_pers": 100.0,
-  "model_pers_blend_lambda_mean": 0.6500000378699544,
-  "model_pers_blend_lambda_min": 0.6500000000532484,
-  "model_regime_conf_adj_mean": 4.057495392073697e-08
+  "model_pers_blend_lambda_mean": 0.6500000982535576,
+  "model_pers_blend_lambda_min": 0.6500000007315296,
+  "model_regime_conf_adj_mean": 1.0527168215639938e-07
 }
