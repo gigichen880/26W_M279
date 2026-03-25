@@ -48,6 +48,7 @@ from similarity_forecast.core import (
     project_to_spd,
 )
 from similarity_forecast.regimes import RegimeModel
+from similarity_forecast.regime_clustering import make_regime_clusterer
 from similarity_forecast.pipeline import RegimeAwareSimilarityForecaster
 from scripts.clean_data import clean_returns_matrix_at_load
 
@@ -174,6 +175,8 @@ def build_model(
     eps_spd: float,
     # ablation / design choices
     knn_metric: str = "l2",
+    knn_lp_p: float = 2.0,
+    regime_clustering: dict | None = None,
     regime_aggregation: str = "soft",
     # pipeline stability
     output_shrink_toward_diag: float = 0.0,
@@ -225,11 +228,30 @@ def build_model(
     else:
         raise ValueError("target_type must be one of {'covariance','volatility','precision'}")
 
+    rcfg = regime_clustering if isinstance(regime_clustering, dict) else {}
+    if rcfg.get("name"):
+        clusterer = make_regime_clusterer(
+            str(rcfg["name"]),
+            int(n_regimes),
+            int(random_state),
+            dict(rcfg.get("params") or {}),
+        )
+    else:
+        clusterer = make_regime_clusterer(
+            "gmm",
+            int(n_regimes),
+            int(random_state),
+            {
+                "gmm_init_params": str(gmm_init_params),
+                "gmm_n_init": int(gmm_n_init),
+            },
+        )
     regime_model = RegimeModel(
         n_regimes=int(n_regimes),
+        clusterer=clusterer,
+        trans_smooth=float(trans_smooth),
+        eps=1e-12,
         random_state=int(random_state),
-        gmm_init_params=str(gmm_init_params),
-        gmm_n_init=int(gmm_n_init),
     )
     return RegimeAwareSimilarityForecaster(
         embedder=embedder,
@@ -243,6 +265,7 @@ def build_model(
         trans_smooth=float(trans_smooth),
         sample_stride=int(sample_stride),
         knn_metric=str(knn_metric).lower(),
+        knn_lp_p=float(knn_lp_p),
         regime_aggregation=str(regime_aggregation).lower(),
         output_shrink_toward_diag=float(output_shrink_toward_diag),
         alpha_smooth_frac=float(alpha_smooth_frac),
@@ -330,6 +353,8 @@ def run_backtest(
 
     # design choices (for ablation)
     knn_metric: str = "l2",
+    knn_lp_p: float = 2.0,
+    regime_clustering: dict | None = None,
     regime_aggregation: str = "soft",
     regime_weighting: str = "filtered",  # "filtered" | "raw_pi"
     # pipeline stability (improve GMVP variance)
@@ -440,6 +465,8 @@ def run_backtest(
                 aggregator_name=str(aggregator_name),
                 eps_spd=float(eps_spd),
                 knn_metric=str(knn_metric),
+                knn_lp_p=float(knn_lp_p),
+                regime_clustering=regime_clustering if isinstance(regime_clustering, dict) else None,
                 regime_aggregation=str(regime_aggregation),
                 output_shrink_toward_diag=float(output_shrink_toward_diag),
                 alpha_smooth_frac=float(alpha_smooth_frac),
@@ -889,6 +916,8 @@ def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple
         model_blend_to_pers_conf_threshold=float(stcfg.get("model_blend_to_pers_conf_threshold", 0.0)),
         model_blend_to_pers_power=float(stcfg.get("model_blend_to_pers_power", 1.0)),
         knn_metric=str(mcfg.get("knn_metric", "l2")),
+        knn_lp_p=float(mcfg.get("knn_lp_p", 2.0)),
+        regime_clustering=mcfg.get("regime_clustering") if isinstance(mcfg.get("regime_clustering"), dict) else None,
         regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
         regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
         output_shrink_toward_diag=float(mcfg.get("output_shrink_toward_diag", 0)),
@@ -1005,6 +1034,8 @@ def main():
         model_blend_to_pers_conf_threshold=float(stcfg.get("model_blend_to_pers_conf_threshold", 0.0)),
         model_blend_to_pers_power=float(stcfg.get("model_blend_to_pers_power", 1.0)),
         knn_metric=str(mcfg.get("knn_metric", "l2")),
+        knn_lp_p=float(mcfg.get("knn_lp_p", 2.0)),
+        regime_clustering=mcfg.get("regime_clustering") if isinstance(mcfg.get("regime_clustering"), dict) else None,
         regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
         regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
         output_shrink_toward_diag=float(mcfg.get("output_shrink_toward_diag", 0)),

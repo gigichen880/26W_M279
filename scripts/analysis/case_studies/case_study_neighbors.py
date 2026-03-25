@@ -97,6 +97,10 @@ def _build_model_from_cfg(cfg: dict) -> tuple:
         aggregator_name=str(acfg["name"]),
         eps_spd=float(acfg["eps_spd"]),
         knn_metric=str(mcfg.get("knn_metric", "l2")),
+        knn_lp_p=float(mcfg.get("knn_lp_p", 2.0)),
+        regime_clustering=mcfg.get("regime_clustering")
+        if isinstance(mcfg.get("regime_clustering"), dict)
+        else None,
         regime_aggregation=str(mcfg.get("regime_aggregation", "soft")),
     )
     return model, mcfg

@@ -45,10 +45,6 @@ def expm_sym(A: NDArray[np.floating]) -> NDArray[np.floating]:
     w, V = np.linalg.eigh(A)
     return (V * np.exp(w)) @ V.T
 
-import warnings
-from typing import Optional, Tuple
-from numpy.typing import NDArray
-from typing import Tuple
 
 def impute_returns_window(
     R: NDArray[np.floating],
@@ -160,14 +156,143 @@ def validate_window(
 # Neighbor search (Exact KNN)
 # =========================
 
+class EmbeddingDistance(Protocol):
+    """
+    Pairwise dissimilarity from each row of E to a single query vector q.
+    E: [T, d], q: [d] -> distances [T], non-negative, larger = farther.
+
+    High-dimensional note (for ablations / robustness):
+    - Raw L2 often concentrates (norms and pairwise distances look similar as d grows).
+      Cosine or angular distance focus on direction and are common for sparse / high-d text-like vectors.
+    - L1 / Chebyshev are robust to heavy tails; L1 is less sensitive to single large coordinate differences.
+    - Mahalanobis (not built-in here) rescales by estimated covariance on the training embeddings;
+      useful when coordinates have different scales or are correlated.
+    - For any metric, exp(-dist/tau) weights may need tau retuned when the distance scale changes.
+    """
+
+    def pairwise(self, E: NDArray[np.floating], q: NDArray[np.floating]) -> NDArray[np.floating]: ...
+
+
+@dataclass(frozen=True)
+class LpEmbeddingDistance:
+    """Minkowski / Lp distance. Use p=inf for Chebyshev (max coordinate)."""
+
+    p: float
+
+    def pairwise(self, E: NDArray[np.floating], q: NDArray[np.floating]) -> NDArray[np.floating]:
+        E = np.asarray(E, dtype=float)
+        q = np.asarray(q, dtype=float)
+        diff = E - q[None, :]
+        p = float(self.p)
+        if np.isinf(p):
+            return np.max(np.abs(diff), axis=1).astype(float)
+        if p <= 0:
+            raise ValueError(f"Lp requires p > 0 or p=inf, got {p!r}")
+        if p == 1.0:
+            return np.sum(np.abs(diff), axis=1).astype(float)
+        if p == 2.0:
+            d2 = np.einsum("ij,ij->i", diff, diff)
+            return np.sqrt(np.maximum(d2, 0.0)).astype(float)
+        ad = np.abs(diff)
+        s = np.sum(np.power(ad, p), axis=1)
+        return np.power(np.maximum(s, 0.0), 1.0 / p).astype(float)
+
+
+@dataclass(frozen=True)
+class CosineEmbeddingDistance:
+    """Cosine distance 1 - cos(theta), in [0, 2]. Scale-invariant per direction."""
+
+    eps: float = 1e-12
+
+    def pairwise(self, E: NDArray[np.floating], q: NDArray[np.floating]) -> NDArray[np.floating]:
+        E = np.asarray(E, dtype=float)
+        q = np.asarray(q, dtype=float)
+        dot = E @ q
+        nE = np.linalg.norm(E, axis=1)
+        nq = np.linalg.norm(q)
+        denom = np.maximum(nE * nq, self.eps)
+        cos = np.clip(dot / denom, -1.0, 1.0)
+        return (1.0 - cos).astype(float)
+
+
+@dataclass(frozen=True)
+class AngularEmbeddingDistance:
+    """Geodesic angle arccos(cos(theta)) on the unit sphere, in [0, pi]."""
+
+    eps: float = 1e-12
+
+    def pairwise(self, E: NDArray[np.floating], q: NDArray[np.floating]) -> NDArray[np.floating]:
+        E = np.asarray(E, dtype=float)
+        q = np.asarray(q, dtype=float)
+        dot = E @ q
+        nE = np.linalg.norm(E, axis=1)
+        nq = np.linalg.norm(q)
+        denom = np.maximum(nE * nq, self.eps)
+        cos = np.clip(dot / denom, -1.0, 1.0)
+        return np.arccos(cos).astype(float)
+
+
+def make_embedding_distance(
+    metric: str,
+    *,
+    lp_p: float = 2.0,
+) -> EmbeddingDistance:
+    """
+    Factory for built-in KNN metrics (string names used in configs).
+
+    Supported names
+    ---------------
+    l1, manhattan, cityblock
+    l2, euclidean
+    lp  -> use exponent ``lp_p`` (must be finite and > 0, or inf for Chebyshev)
+    chebyshev, linf, l-inf
+    cosine
+    angular
+    """
+    m = str(metric).strip().lower()
+    if m in {"l1", "manhattan", "cityblock"}:
+        return LpEmbeddingDistance(p=1.0)
+    if m in {"l2", "euclidean"}:
+        return LpEmbeddingDistance(p=2.0)
+    if m in {"chebyshev", "linf", "l-inf", "l_inf", "infinity"}:
+        return LpEmbeddingDistance(p=float("inf"))
+    if m == "lp":
+        p = float(lp_p)
+        if p == float("inf") or np.isinf(p):
+            return LpEmbeddingDistance(p=float("inf"))
+        if not np.isfinite(p) or p <= 0:
+            raise ValueError(f"lp_p must be positive finite or inf, got {lp_p!r}")
+        return LpEmbeddingDistance(p=p)
+    if m == "cosine":
+        return CosineEmbeddingDistance()
+    if m == "angular":
+        return AngularEmbeddingDistance()
+    raise ValueError(
+        "Unknown knn metric {0!r}. Expected one of: l1, l2, lp, chebyshev, cosine, angular "
+        "(aliases: euclidean, manhattan, cityblock, linf).".format(metric)
+    )
+
+
 @dataclass
 class ExactKNN:
     """
-    Exact KNN in embedding space. Supports L2 or L1 distance.
+    Exact KNN in embedding space using a built-in metric name or a custom EmbeddingDistance.
     Stores E: [T, d]
     """
+
     E: NDArray[np.floating]
-    metric: str = "l2"  # "l2" (Euclidean) or "l1" (Manhattan)
+    metric: str = "l2"
+    lp_p: float = 2.0
+    distance: Optional[EmbeddingDistance] = None
+
+    def __post_init__(self) -> None:
+        if self.distance is not None:
+            self._pairwise: EmbeddingDistance = self.distance
+        else:
+            self._pairwise = make_embedding_distance(
+                str(self.metric).lower(),
+                lp_p=float(self.lp_p),
+            )
 
     def query(
         self,
@@ -175,15 +300,10 @@ class ExactKNN:
         k: int,
         exclude_index: Optional[int] = None,
     ) -> Tuple[NDArray[np.int64], NDArray[np.floating]]:
-        diff = self.E - e[None, :]
-        m = str(self.metric).lower()
-        if m == "l1":
-            dist_all = np.sum(np.abs(diff), axis=1).astype(float)
-        else:
-            d2 = np.einsum("ij,ij->i", diff, diff)
-            dist_all = np.sqrt(np.maximum(d2, 0.0)).astype(float)
+        dist_all = self._pairwise.pairwise(self.E, e)
 
         if exclude_index is not None and 0 <= exclude_index < dist_all.shape[0]:
+            dist_all = dist_all.copy()
             dist_all[exclude_index] = np.inf
 
         k = min(k, dist_all.shape[0])

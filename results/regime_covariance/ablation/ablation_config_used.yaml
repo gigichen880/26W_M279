@@ -24,6 +24,21 @@ axes:
     choices:
     - l2
     - l1
+    - cosine
+    - angular
+    - chebyshev
+    - label: lp_p1
+      model.knn_metric: lp
+      model.knn_lp_p: 1
+    - label: lp_p2
+      model.knn_metric: lp
+      model.knn_lp_p: 2
+    - label: lp_p3
+      model.knn_metric: lp
+      model.knn_lp_p: 3
+    - label: lp_p4
+      model.knn_metric: lp
+      model.knn_lp_p: 4
   regime_aggregation:
     key: model.regime_aggregation
     choices:

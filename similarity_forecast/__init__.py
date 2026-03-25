@@ -29,6 +29,11 @@ from .core import (
 
     # knn
     ExactKNN,
+    EmbeddingDistance,
+    LpEmbeddingDistance,
+    CosineEmbeddingDistance,
+    AngularEmbeddingDistance,
+    make_embedding_distance,
 
     # weighting
     Weighting,
@@ -71,6 +76,15 @@ from .regimes import (
     RegimeModel,
 )
 
+from .regime_clustering import (
+    RegimeClusterer,
+    make_regime_clusterer,
+    list_regime_clustering_methods,
+    implemented_regime_clustering_names,
+    GMMRegimeClusterer,
+    KMeansSoftRegimeClusterer,
+)
+
 from .regime_weighting import (
     RegimeAwareWeights,
 )
@@ -101,6 +115,11 @@ __all__ = [
     "corr_from_cov",
     "validate_window",
     "ExactKNN",
+    "EmbeddingDistance",
+    "LpEmbeddingDistance",
+    "CosineEmbeddingDistance",
+    "AngularEmbeddingDistance",
+    "make_embedding_distance",
     "Weighting",
     "InverseDistanceWeighting",
     "RankWeighting",
@@ -122,6 +141,12 @@ __all__ = [
 
     # regimes
     "RegimeModel",
+    "RegimeClusterer",
+    "make_regime_clusterer",
+    "list_regime_clustering_methods",
+    "implemented_regime_clustering_names",
+    "GMMRegimeClusterer",
+    "KMeansSoftRegimeClusterer",
     "RegimeAwareWeights",
 
     # pipelines

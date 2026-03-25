@@ -21,11 +21,37 @@ model:
   gmm_init_params: "random"
   gmm_n_init: 10
 
+  # Regime assignment on embeddings (Stage 2). Omit or omit `name` to use GMM with gmm_init_params / gmm_n_init above.
+  # n_regimes and random_state always come from this `model:` block (not inside regime_clustering).
+  #
+  # regime_clustering:
+  #   name: fuzzy_cmeans   # needs: pip install scikit-fuzzy
+  #   params:
+  #     fuzziness: 2.0      # m in fuzzy c-means (default 2)
+  #     max_iter: 300
+  #     error: 1.0e-5       # convergence tolerance (skfuzzy `error`)
+  #     eps: 1.0e-12        # row-normalization floor for PI
+  #
+  # Other runnable names + useful params (all under params:):
+  #   gmm — covariance_type, reg_covar, max_iter, tol, gmm_init_params, gmm_n_init, eps
+  #   kmeans_soft — n_init, max_iter, temperature, eps
+  #   spectral_rbf — gamma (optional), temperature, eps
+  #   spectral_knn — n_neighbors, temperature, eps
+  #   agglomerative_ward — linkage, temperature, eps
+  #   modified_two_stage — outlier_quantile, n_init, temperature, eps
+  #   signed_knn_spectral — n_neighbors, temperature, eps
+  #
+  # Slide-only (need extra inputs): hermitian_spectral, disg_co_clustering, dsbm → clear error if selected.
+
   # target object
   ddof: 1
 
   # stage-1/2/3 training sampling stride (controls how many anchor windows are used for fit())
   sample_stride: 3
+
+  # KNN in embedding space: l1, l2, lp (set knn_lp_p), chebyshev, cosine, angular
+  knn_metric: "lp"
+  knn_lp_p: 1.0
 
   # Pipeline stability: lower GMVP variance with minimal Sharpe drop. No blend with roll/shrink (see docs/MODEL_VS_MIX_DESIGN.md).
   output_shrink_toward_diag: 0.12 # reduced from 0.18 so model is more distinct from shrink → better model vs shrink

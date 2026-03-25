@@ -314,8 +314,6 @@ We use pairwise-complete observations and window validation instead, which is st
 - Selected 100 high-quality stocks (~98.5% availability).
 - Includes 18 mega-caps: AAPL, MSFT, GOOGL, AMZN, NVDA, META/FB, NFLX, JPM, BAC, WFC, JNJ, PFE, UNH, WMT, HD, V, MA, NKE.
 
-Here’s a **drop-in README section** you can paste (I’d place it right after “Main Pipeline” / “Outputs”, before “Handling Missing Data”). It’s intentionally not too detailed but names the metrics you’re already computing.
-
 ## Evaluation
 
 We evaluate covariance forecasts in a walk-forward backtest (no look-ahead bias).
@@ -391,6 +389,23 @@ These isolate correlation forecasting skill separately from volatility scale.
 ---
 
 ## Running Evaluation & Analysis
+
+### Ablation: kNN distance vs regime clustering (quick reference)
+
+Two dedicated ablations isolate **which part of the pipeline** you are changing:
+
+| Ablation | Pipeline stage | Config keys | What the params mean |
+| -------- | -------------- | ----------- | --------------------- |
+| **kNN / embedding distance** | Stage 4 — nearest neighbors in embedding space | `model.knn_metric` (and `model.knn_lp_p` when metric is `lp`) | Chooses how distance \(d(z_t, z_i)\) is computed before the kernel \(\kappa_i = \exp(-d_i/\tau)\). Choices include `l2`, `l1`, `cosine`, `angular`, `chebyshev`, and labeled Lp runs `lp_p1`…`lp_p4` (`knn_metric: lp` + integer `knn_lp_p`). **`model.tau`** is not swept by default; distance scales differ by metric. |
+| **Regime clustering** | Stage 2 — soft regime memberships \(\pi_t(k)\) on training embeddings | `model.regime_clustering.name` and `model.regime_clustering.params` | Selects the backend (`gmm`, `kmeans_soft`, `spectral_rbf`, `spectral_knn`, `agglomerative_ward`, `fuzzy_cmeans`, `modified_two_stage`, `signed_knn_spectral`). **`params`** holds method-specific hyperparameters (e.g. `fuzziness` for fuzzy c-means, `n_neighbors` for spectral KNN). **`model.n_regimes`** and **`model.random_state`** always come from the top-level `model:` block, not from `regime_clustering`. |
+
+**Shared ablation YAML mechanics** (both sweeps): `base_config` loads a full run config; `overrides` is merged for every run (shorter dates, stride, refit cadence); `mode: one_at_a_time` runs one choice per axis while holding the rest at base values.
+
+**Where to run and full parameter tables**
+
+- **Distance only:** [§4c — kNN embedding distance ablation](#4c-knn-embedding-distance-ablation) — configs [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml), [`configs/ablation_volatility.yaml`](configs/ablation_volatility.yaml); optional model-only figure via `plot_knn_metric_ablation`.
+- **Clustering only:** [§4d — Regime clustering method ablation](#4d-regime-clustering-method-ablation) — `python -m scripts.analysis.ablation.run_regime_clustering_ablation` or [`configs/ablation_regime_clustering.yaml`](configs/ablation_regime_clustering.yaml); table of per-method `params` used in the default sweep.
+- **Full design grid** (embedder, transition, distance, regime aggregation/weighting): [§4b](#4b-pipeline-design-ablation-one-axis-at-a-time).
 
 ### 1. Main Backtest (Walk-Forward Evaluation)
 
@@ -499,7 +514,7 @@ python -m scripts.analysis.ablation.analyze_k_ablation --ablation-dir results/ab
 Isolate the effect of high-level design choices (embedder, distance, transition, regime aggregation/weighting) without sweeping hyperparameters:
 
 ```bash
-# Covariance: embedder (pca, corr_eig), transition_estimator (hard, soft), knn_metric (l2, l1), regime_aggregation (soft, hard), regime_weighting (filtered, raw_pi)
+# Covariance: embedder (pca, corr_eig), transition_estimator (hard, soft), knn_metric (l2/l1/cosine/angular/chebyshev/Lp), regime_aggregation (soft, hard), regime_weighting (filtered, raw_pi)
 python -m scripts.analysis.ablation.run_ablation --config configs/ablation_covariance.yaml
 
 # Volatility: same axes; embedder choices include vol_stats
@@ -520,9 +535,134 @@ python -m scripts.analysis.ablation.run_ablation --config configs/ablation_volat
 | ---------------------- | -------------------------------- | -------------------------------------------- |
 | `embedder`             | pca, corr_eig (vol: + vol_stats) | Window embedding for similarity              |
 | `transition_estimator` | hard, soft                       | How transition matrix A is estimated         |
-| `knn_metric`           | l2, l1                           | Neighbor distance (Euclidean vs Manhattan)   |
+| `knn_metric`           | l2, l1, cosine, angular, chebyshev, Lp (p=1–4) | Neighbor distance in embedding space ([§4c](#4c-knn-embedding-distance-ablation)) |
 | `regime_aggregation`   | soft, hard                       | Weights over regimes: α vs one-hot argmax(α) |
 | `regime_weighting`     | filtered, raw_pi                 | Use filtered α vs raw GMM π                  |
+
+---
+
+### 4c. kNN embedding distance ablation
+
+This ablation varies **Stage 4 — neighbor retrieval** only: how distances are computed between the anchor embedding \(z_t\) and candidate past embeddings in the training pool. It does **not** change Stage 2 regime clustering unless you edit the base config; default regime assignment stays **GMM** (or whatever `model.regime_clustering` you set in the base YAML).
+
+#### Config keys and YAML shape
+
+| YAML field | Meaning |
+| ---------- | ------- |
+| `base_config` | Starting point (e.g. `regime_covariance.yaml`); all other model/backtest keys come from here unless overridden. |
+| `mode: one_at_a_time` | For each **axis**, run every **choice** once; non-swept keys stay at base (+ `overrides`). |
+| `overrides` | Merged on top of `base_config` for **every** ablation run (shorter date range, coarser stride, refit cadence, etc.). Does not modify the file on disk. |
+| `axes.knn_metric.key` | Dotted path into the merged config: `model.knn_metric` (and optionally `model.knn_lp_p` for Lp). |
+| `axes.knn_metric.choices` | Each entry is either a **string** (sets only `model.knn_metric`) or a **dict** with optional `label`, nested keys like `model.knn_metric` / `model.knn_lp_p` (see [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml)). |
+
+**Typical `overrides` for speed** (covariance design ablation): `data.start_date` / `data.end_date`, `backtest.stride`, `backtest.refit_mode`, `backtest.refit_every_days`. Same idea in [`configs/ablation_volatility.yaml`](configs/ablation_volatility.yaml) for the vol pipeline.
+
+**Runtime config fields touched by this axis:**
+
+| Config key | Role |
+| ---------- | ---- |
+| `model.knn_metric` | Metric name: `l2`, `l1`, `lp`, `cosine`, `angular`, `chebyshev` (aliases like `euclidean` / `manhattan` are accepted in code). |
+| `model.knn_lp_p` | Used only when `knn_metric: lp`: Minkowski exponent \(p > 0\), or `inf` for Chebyshev. |
+
+**Kernel:** neighbor weights use \(\kappa_i = \exp(-d_i / \tau)\) with **`model.tau`**. Distance scale depends on the metric, so **`tau` is not swept** in the default ablation configs; for a fair comparison across metrics you may want a dedicated **`tau`** axis or manual retuning.
+
+#### Choices in `ablation_covariance.yaml` / `ablation_volatility.yaml` (meaning)
+
+Implemented in `similarity_forecast/core.py` (`make_embedding_distance` / `ExactKNN`):
+
+| Choice label | Config | Distance (higher = farther) |
+| ------------ | ------ | --------------------------- |
+| `l2` | `knn_metric: l2` | Euclidean \(\|z - q\|_2\). |
+| `l1` | `knn_metric: l1` | Manhattan / L1 \(\sum_d \|z_d - q_d\|\). |
+| `cosine` | `knn_metric: cosine` | Cosine distance \(1 - \cos\theta\), in \([0, 2]\); scale-invariant in direction. |
+| `angular` | `knn_metric: angular` | Geodesic angle \(\arccos(\cos\theta)\) on the unit sphere, in \([0, \pi]\). |
+| `chebyshev` | `knn_metric: chebyshev` | L\(\infty\) / max coordinate \( \max_d \|z_d - q_d\| \). |
+| `lp_p1` … `lp_p4` | `knn_metric: lp`, `knn_lp_p: 1..4` | Minkowski \(\big(\sum_d \|z_d - q_d\|^p\big)^{1/p}\). Note `lp_p1` / `lp_p2` duplicate `l1` / `l2` numerically but keep explicit Lp-labeled runs in the summary. |
+
+**Configs:**
+
+- Covariance: [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml).
+- Volatility: [`configs/ablation_volatility.yaml`](configs/ablation_volatility.yaml) — same `knn_metric` axis plus vol-specific axes (e.g. embedder).
+
+**Run:**
+
+```bash
+python -m scripts.analysis.ablation.run_ablation --config configs/ablation_covariance.yaml
+python -m scripts.analysis.ablation.run_ablation --config configs/ablation_volatility.yaml
+```
+
+**Outputs:** rows with `axis == knn_metric` in `results/regime_covariance/ablation/ablation_summary.csv` (or `results/regime_volatility/ablation/...`), per-choice backtests under `results/<tag>/ablation/runs/knn_metric/<choice>/`, and overlay figures under `results/<tag>/figs/ablation/knn_metric/`.
+
+**Model-only figure (4-panel bars from the summary CSV):**
+
+```bash
+python -m scripts.analysis.ablation.plot_knn_metric_ablation
+# or: --summary path/to/ablation_summary.csv
+```
+
+Default summary path is `results/regime_covariance/ablation/ablation_summary.csv`.
+
+---
+
+### 4d. Regime clustering method ablation
+
+This ablation varies **Stage 2 — regime assignment**: how training-window embeddings \(Z\) are mapped to soft memberships \(\pi_t(k)\) (and how OOS rows get `predict_proba`). **Stages 1, 3–5** follow the base config plus the same global **`overrides`** as in the spec (unless you edit them).
+
+#### Config keys and YAML shape
+
+| YAML field | Meaning |
+| ---------- | ------- |
+| `base_config` | e.g. `regime_covariance.yaml` — supplies `model.n_regimes`, `model.random_state`, KNN, embedder, etc. |
+| `overrides` | Applied to every run (in the dedicated script: 2015–2021, `stride: 5`, `refit_every_days: 20`, `refit_mode: days`). |
+| `axes.regime_clustering.key` | `model.regime_clustering` — each choice is a dict `{ name, params }` merged into the model block. |
+
+**Per-run `model.regime_clustering` structure:**
+
+| Sub-key | Meaning |
+| ------- | ------- |
+| `name` | Backend id: `gmm`, `kmeans_soft`, `spectral_rbf`, `spectral_knn`, `agglomerative_ward`, `fuzzy_cmeans`, `modified_two_stage`, `signed_knn_spectral`. |
+| `params` | Method-specific hyperparameters passed to `make_regime_clusterer` in `similarity_forecast/regime_clustering.py`. Omitted keys use code defaults. |
+
+**Important:** `model.n_regimes` and `model.random_state` always come from the **base** `model:` block, not from `regime_clustering`. For **GMM** runs in this ablation, `params` is usually `{}`; that uses **clusterer defaults** (`gmm_init_params: kmeans`, `gmm_n_init: 1`, etc.), **not** the legacy top-level `model.gmm_init_params` / `model.gmm_n_init` (those apply only when `regime_clustering` is absent and the default GMM path is built in `run_backtest.build_model`).
+
+#### Parameters used in the default clustering comparison sweep
+
+The script [`scripts/analysis/ablation/run_regime_clustering_ablation.py`](scripts/analysis/ablation/run_regime_clustering_ablation.py) generates one choice per `implemented_regime_clustering_names()`. Extra `params` are only set for the two graph methods; everything else is `{}` (code defaults below).
+
+| `name` | `params` in ablation | Default hyperparameters when `params` is `{}` (meaning) |
+| ------ | -------------------- | -------------------------------------------------------- |
+| `gmm` | `{}` | `covariance_type=diag`, `reg_covar=1e-3`, `max_iter=300`, `tol=1e-3`, `gmm_init_params=kmeans`, `gmm_n_init=1`, `eps=1e-12`. |
+| `kmeans_soft` | `{}` | `n_init=10`, `max_iter=300`, `temperature=1.0` (softmax sharpness to prototypes), `eps=1e-12`. |
+| `spectral_rbf` | `{}` | RBF affinity; `gamma=None` (sklearn default), `temperature=1.0`, `eps=1e-12`. |
+| `spectral_knn` | `n_neighbors: 10` | KNN affinity with `n_neighbors=10`, plus `temperature=1.0`, `eps=1e-12`. |
+| `agglomerative_ward` | `{}` | `linkage=ward`, `temperature=1.0`, `eps=1e-12`. |
+| `fuzzy_cmeans` | `{}` | `fuzziness=2.0` (m), `max_iter=300`, `error=1e-5` (skfuzzy tolerance), `eps=1e-12`. Requires **`pip install scikit-fuzzy`**. |
+| `modified_two_stage` | `{}` | `outlier_quantile=0.9`, `n_init=10`, `temperature=1.0`, `eps=1e-12`. |
+| `signed_knn_spectral` | `n_neighbors: 15` | Signed graph from embedding cosine similarity; `n_neighbors=15`, `temperature=1.0`, `eps=1e-12`. |
+
+For **production or tuned comparisons**, set `model.regime_clustering` in [`configs/regime_covariance.yaml`](configs/regime_covariance.yaml) (see commented examples there).
+
+**Run (recommended — spec stays in sync with code):**
+
+```bash
+python -m scripts.analysis.ablation.run_regime_clustering_ablation
+python -m scripts.analysis.ablation.run_regime_clustering_ablation --verbose
+python -m scripts.analysis.ablation.run_regime_clustering_ablation --plot-only   # figure from existing summary only
+```
+
+**Alternative:** static spec in [`configs/ablation_regime_clustering.yaml`](configs/ablation_regime_clustering.yaml):
+
+```bash
+python -m scripts.analysis.ablation.run_ablation --config configs/ablation_regime_clustering.yaml
+```
+
+**Dependencies:** `fuzzy_cmeans` requires **scikit-fuzzy**. Other methods use scikit-learn / SciPy only.
+
+**Outputs:**
+
+- `results/regime_covariance/ablation_regime_clustering/ablation_spec.yaml` (when using the dedicated script)
+- `results/regime_covariance/ablation_regime_clustering/ablation_summary.csv`
+- `results/regime_covariance/ablation_regime_clustering/figs/regime_clustering_model_only.png` (model metrics bar chart)
 
 ---
 
@@ -621,7 +761,8 @@ After running complete pipeline:
 - `results/regime_covariance/regime_characterization.csv` - Regime statistics
 - `results/ablation_k/ablation_k_comparison.csv` - K ablation results
 - `results/regime_covariance/comprehensive_baseline_comparison.csv` - Full baseline comparison
-- `results/regime_covariance/ablation/ablation_summary.csv` - Design ablation summary
+- `results/regime_covariance/ablation/ablation_summary.csv` - Design ablation summary (includes kNN distance axis when using `ablation_covariance.yaml`)
+- `results/regime_covariance/ablation_regime_clustering/ablation_summary.csv` - Regime clustering method ablation
 
 **Key Figures (covariance example, all under `results/regime_covariance/figs/`):**
 
@@ -649,4 +790,4 @@ See [docs/RESULTS_FINAL_REPORT.md](docs/RESULTS_FINAL_REPORT.md) for result summ
 
 ---
 
-Last updated: February 2026
+Last updated: March 2026

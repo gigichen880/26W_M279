@@ -39,7 +39,7 @@ class RegimeAwareSimilarityForecaster:
 
     Stages:
       1) Build window embeddings z_t = f(X_t)
-      2) Fit GMM on embeddings -> soft regime membership PI[t,k]
+      2) Fit pluggable regime clusterer on embeddings -> soft membership PI[t,k] (default: GMM)
       3) Estimate transition A from hard assignments; filter alpha_t
       4) Retrieve M nearest neighbors via similarity kernel kappa_i = exp(-||z0-zi||/tau)
       5) Regime-aware KNN:
@@ -93,7 +93,8 @@ class RegimeAwareSimilarityForecaster:
     trans_smooth: float = 1.0           # Laplace smoothing λ
 
     # KNN distance and regime aggregation
-    knn_metric: str = "l2"              # {"l2","l1"} for neighbor search
+    knn_metric: str = "l2"              # see make_embedding_distance() in core (l1,l2,lp,chebyshev,cosine,angular,...)
+    knn_lp_p: float = 2.0               # exponent when knn_metric == "lp"
     regime_aggregation: str = "soft"    # {"soft","hard"}: soft = alpha weights; hard = one-hot argmax(alpha)
 
     # Output stability (improves GMVP variance / reduces extreme weights)
@@ -179,7 +180,11 @@ class RegimeAwareSimilarityForecaster:
 
         self.embeds_ = np.stack(embeds, axis=0).astype(float)   # [T0, D]
         self.targets_ = np.stack(targets, axis=0).astype(float) # [T0, ...]
-        self.knn_ = ExactKNN(self.embeds_, metric=str(self.knn_metric).lower())
+        self.knn_ = ExactKNN(
+            self.embeds_,
+            metric=str(self.knn_metric).lower(),
+            lp_p=float(self.knn_lp_p),
+        )
 
         # anchor dates for debugging
         if isinstance(returns_df.index, pd.DatetimeIndex):
@@ -187,7 +192,7 @@ class RegimeAwareSimilarityForecaster:
         else:
             self.anchor_dates_ = None
 
-        # Stage 2: GMM -> PI
+        # Stage 2: regime clustering -> PI
         self.regime_model.fit_gmm(self.embeds_)
         self.PI_ = self.regime_model.predict_pi(self.embeds_)  # [T0, K]
 

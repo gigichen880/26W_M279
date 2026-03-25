@@ -1,0 +1,50 @@
+base_config: /Users/zhiyichen/Desktop/26W_M279/configs/regime_covariance.yaml
+mode: one_at_a_time
+overrides:
+  data:
+    start_date: '2015-01-01'
+    end_date: '2021-12-31'
+  backtest:
+    stride: 5
+    refit_mode: days
+    refit_every_days: 20
+axes:
+  regime_clustering:
+    key: model.regime_clustering
+    choices:
+    - label: agglomerative_ward
+      model.regime_clustering:
+        name: agglomerative_ward
+        params: {}
+    - label: fuzzy_cmeans
+      model.regime_clustering:
+        name: fuzzy_cmeans
+        params: {}
+    - label: gmm
+      model.regime_clustering:
+        name: gmm
+        params: {}
+    - label: kmeans_soft
+      model.regime_clustering:
+        name: kmeans_soft
+        params: {}
+    - label: modified_two_stage
+      model.regime_clustering:
+        name: modified_two_stage
+        params: {}
+    - label: signed_knn_spectral
+      model.regime_clustering:
+        name: signed_knn_spectral
+        params:
+          n_neighbors: 15
+    - label: spectral_knn
+      model.regime_clustering:
+        name: spectral_knn
+        params:
+          n_neighbors: 10
+    - label: spectral_rbf
+      model.regime_clustering:
+        name: spectral_rbf
+        params: {}
+outputs:
+  outdir: /Users/zhiyichen/Desktop/26W_M279/results/regime_covariance/ablation_regime_clustering

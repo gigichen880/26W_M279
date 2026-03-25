@@ -11,9 +11,19 @@ Records summary metrics (primary metric mean for model/mix and GMVP metrics for 
 Use to isolate or tune:
   - embedder (pca, corr_eig, vol_stats for vol)
   - transition_estimator (hard vs soft)
-  - knn_metric (l2 vs l1)
+  - knn_metric (scalars or dict choices to set model.knn_metric + model.knn_lp_p together)
   - regime_aggregation (soft vs hard)
   - regime_weighting (filtered vs raw_pi)
+
+Dict choice example (YAML):
+
+  knn_metric:
+    key: model.knn_metric
+    choices:
+      - l2
+      - label: lp_p3
+        model.knn_metric: lp
+        model.knn_lp_p: 3
 
 Usage:
   python -m scripts.analysis.ablation.run_ablation --config configs/ablation_covariance.yaml
@@ -56,6 +66,55 @@ def _get_dotted(cfg: dict, key: str, default: Any = None) -> Any:
     return cur
 
 
+def _ablation_choice_str(axis_spec: dict, choice: Any) -> str:
+    """Tag for summary tables, run_tag, and output filenames."""
+    if isinstance(choice, dict):
+        label = choice.get("label")
+        if label is not None:
+            return str(label)
+        updates = {k: v for k, v in choice.items() if k != "label"}
+        return "_".join(
+            f"{str(k).replace('.', '_')}_{v}" for k, v in sorted(updates.items())
+        )
+    return str(choice).lower() if isinstance(choice, str) else str(choice)
+
+
+def _safe_filename_tag(s: str) -> str:
+    return (
+        str(s)
+        .replace("/", "_")
+        .replace(":", "_")
+        .replace(" ", "_")
+        .replace("|", "_")
+    )
+
+
+def _merge_ablation_choice(merged: dict, *, axis_spec: dict, choice: Any) -> tuple[dict, str]:
+    """
+    Merge one axis choice into config. Scalar choices use axis_spec['key'].
+    Dict choices set each dotted path (excluding key 'label') and should use label: for short tags.
+    """
+    choice_str = _ablation_choice_str(axis_spec, choice)
+    if isinstance(choice, dict):
+        updates = {k: v for k, v in choice.items() if k != "label"}
+        for dotted, val in updates.items():
+            if not isinstance(dotted, str):
+                raise ValueError(
+                    f"Ablation dict choice keys must be dotted config paths (str), got {dotted!r}"
+                )
+            if "." not in dotted:
+                raise ValueError(
+                    f"Ablation dict choice key must be a dotted path (e.g. model.knn_metric), got {dotted!r}"
+                )
+            merged = deep_update(merged, _set_dotted({}, dotted, val))
+    else:
+        key_path = axis_spec.get("key")
+        if not key_path:
+            raise ValueError("Scalar ablation choice requires axis['key'] in the axis spec.")
+        merged = deep_update(merged, _set_dotted({}, key_path, choice))
+    return merged, choice_str
+
+
 PlotsMode = Literal["none", "summary", "per_run", "all"]
 
 
@@ -72,6 +131,7 @@ def run_ablation(
     Ablation config must have:
       base_config: path to base YAML (e.g. regime_covariance.yaml)
       axes: dict of axis_name -> { key: "dotted.path", choices: [v1, v2, ...] }
+      Each choice may be a scalar (sets key) or a dict of dotted.path -> value, optional label: str.
     """
     cfg = load_yaml(cfg_path)
     base_path = cfg["base_config"]
@@ -133,7 +193,6 @@ def run_ablation(
         axis_items = list(axes_cfg.items())
         axis_names = [a for a, _ in axis_items]
         choices_lists = [list(spec["choices"]) for _, spec in axis_items]
-        keys = [spec["key"] for _, spec in axis_items]
         total = int(np.prod([len(c) for c in choices_lists])) if choices_lists else 0
         print(f"Running GRID over {len(axis_names)} axes ({total} combinations). Objective={objective}")
 
@@ -141,11 +200,10 @@ def run_ablation(
             merged = copy.deepcopy(base_cfg)
             tags = []
             combo_dict = {}
-            for axis_name, key_path, choice in zip(axis_names, keys, combo):
-                choice_str = str(choice).lower() if isinstance(choice, str) else str(choice)
+            for (axis_name, axis_spec), choice in zip(axis_items, combo):
+                merged, choice_str = _merge_ablation_choice(merged, axis_spec=axis_spec, choice=choice)
                 combo_dict[axis_name] = choice_str
                 tags.append(f"{axis_name}={choice_str}")
-                merged = deep_update(merged, _set_dotted({}, key_path, choice))
             run_tag = "|".join(tags)
             print(f"  Running grid: {run_tag} ...")
             try:
@@ -173,11 +231,11 @@ def run_ablation(
     else:
         # One-at-a-time ablation
         for axis_name, axis_spec in axes_cfg.items():
-            key_path = axis_spec["key"]
             choices = list(axis_spec["choices"])
             for choice in choices:
-                choice_str = str(choice).lower() if isinstance(choice, str) else str(choice)
-                merged = deep_update(copy.deepcopy(base_cfg), _set_dotted({}, key_path, choice))
+                merged, choice_str = _merge_ablation_choice(
+                    copy.deepcopy(base_cfg), axis_spec=axis_spec, choice=choice
+                )
                 run_tag = f"{axis_name}={choice_str}"
                 print(f"  Running ablation: {run_tag} ...")
                 try:
@@ -199,7 +257,7 @@ def run_ablation(
                 # Persist time series so we can visualize later (and avoid reruns)
                 axis_dir = os.path.join(runs_dir, axis_name)
                 os.makedirs(axis_dir, exist_ok=True)
-                run_base = os.path.join(axis_dir, f"{choice_str}")
+                run_base = os.path.join(axis_dir, _safe_filename_tag(choice_str))
                 try:
                     results_df.to_parquet(run_base + ".parquet")
                 except Exception:
@@ -485,7 +543,7 @@ def run_ablation(
             axis_fig_dir = os.path.join(figs_dir, axis_name)
             dfs_by_choice: dict[str, pd.DataFrame] = {}
             for choice in axis_spec["choices"]:
-                choice_str = str(choice).lower() if isinstance(choice, str) else str(choice)
+                choice_str = _safe_filename_tag(_ablation_choice_str(axis_spec, choice))
                 pbase = os.path.join(runs_dir, axis_name, choice_str)
                 if not (os.path.exists(pbase + ".parquet") or os.path.exists(pbase + ".csv")):
                     continue
