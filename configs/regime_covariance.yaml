@@ -50,7 +50,7 @@ model:
   sample_stride: 3
 
   # KNN in embedding space: l1, l2, lp (set knn_lp_p), chebyshev, cosine, angular
-  knn_metric: "lp"
+  knn_metric: "l1"
   knn_lp_p: 1.0
 
   # Pipeline stability: lower GMVP variance with minimal Sharpe drop. No blend with roll/shrink (see docs/MODEL_VS_MIX_DESIGN.md).
@@ -61,7 +61,7 @@ embedder:
   name: "pca" # "pca" or "corr_eig"
 
   # PCA embedder params
-  pca_k: 48
+  pca_k: 40
 
   # Corr-eig embedder params
   k_eigs: 32
@@ -76,7 +76,7 @@ aggregator:
   eps_spd: 1.0e-8
 
 backtest:
-  k_neighbors: 30
+  k_neighbors: 10
   stride: 5 # evaluation stride in raw_anchor units
   neighbor_gap: 10 # disallow near-duplicate neighbors
 

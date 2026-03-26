@@ -1,0 +1,47 @@
+base_config: /Users/zhiyichen/Desktop/26W_M279/configs/regime_covariance.yaml
+mode: grid
+objective: model_gmvp_sharpe_mean
+overrides:
+  data:
+    start_date: '2015-01-01'
+    end_date: '2021-12-31'
+  backtest:
+    stride: 5
+    refit_mode: days
+    refit_every_days: 20
+axes:
+  regime_clustering:
+    key: model.regime_clustering
+    choices:
+    - label: agglomerative_ward
+      model.regime_clustering:
+        name: agglomerative_ward
+        params: {}
+    - label: fuzzy_cmeans
+      model.regime_clustering:
+        name: fuzzy_cmeans
+        params: {}
+  knn_metric:
+    key: model.knn_metric
+    choices:
+    - l1
+    - label: lp_p1
+      model.knn_metric: lp
+      model.knn_lp_p: 1
+  pca_k:
+    key: embedder.pca_k
+    choices:
+    - 40
+    - 48
+  tau:
+    key: model.tau
+    choices:
+    - 1.0
+    - 2.0
+  k_neighbors:
+    key: backtest.k_neighbors
+    choices:
+    - 10
+    - 50
+outputs:
+  outdir: /Users/zhiyichen/Desktop/26W_M279/results/regime_covariance/ablation_phase2_joint

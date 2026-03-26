@@ -26,13 +26,13 @@ model:
       eps: 1.0e-12
   ddof: 1
   sample_stride: 3
-  knn_metric: lp
+  knn_metric: l1
   knn_lp_p: 1.0
   output_shrink_toward_diag: 0.12
   alpha_smooth_frac: 0.08
 embedder:
   name: pca
-  pca_k: 48
+  pca_k: 40
   k_eigs: 32
   max_window_na_pct: 0.3
   min_stocks_with_data_pct: 0.8
@@ -41,7 +41,7 @@ aggregator:
   name: logeuc
   eps_spd: 1.0e-08
 backtest:
-  k_neighbors: 30
+  k_neighbors: 10
   stride: 5
   neighbor_gap: 10
   long_only: false

@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from scripts.analysis.utils.backtest_io import read_backtest_table
 from scripts.analysis.utils.paths import resolve_backtest_path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -80,7 +81,7 @@ def load_backtest_results(path=None):
             f"Backtest not found: {path}. "
             "Run: python run_backtest.py --config configs/regime_covariance.yaml or configs/regime_volatility.yaml"
         )
-    df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
+    df = read_backtest_table(path)
     if df.index.name == "date" or "date" not in df.columns:
         df = df.reset_index()
     df["date"] = pd.to_datetime(df["date"])

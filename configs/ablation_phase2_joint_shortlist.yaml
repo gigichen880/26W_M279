@@ -33,7 +33,13 @@ overrides:
     refit_every_days: 20
 
 axes:
-  # SHORTLIST: edit after Phase 1 — defaults are conservative
+  model:
+    transition_estimator: "soft"
+    regime_aggregation: "soft"
+    regime_weighting: "filtered"
+  embedder:
+    name: "pca"
+
   regime_clustering:
     key: model.regime_clustering
     choices:

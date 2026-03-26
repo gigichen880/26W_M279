@@ -55,7 +55,7 @@ def _metric_cols(df: pd.DataFrame, metric: str, methods: List[str]):
 
 
 def plot_equity_curves(df, outdir, methods):
-    """Single-panel plot: GMVP cumulative wealth for all methods."""
+    """Single-panel plot: GMVP cumulative wealth for selected methods (see config `equity_methods`)."""
     cols = _metric_cols(df, "gmvp_cumret", methods)
     if not cols:
         return
@@ -326,10 +326,11 @@ def main():
 
     df = _read_results(csv_path)
     methods = cfg["plot"]["methods"]
+    equity_methods = cfg["plot"].get("equity_methods", methods)
     metrics = cfg["plot"]["overlay_metrics"]
     roll_window = cfg["plot"]["roll_window"]
 
-    plot_equity_curves(df, outdir, methods)
+    plot_equity_curves(df, outdir, equity_methods)
     plot_method_overlays(df, outdir, methods, metrics)
     plot_rolling_median(df, outdir, methods, metrics, roll_window)
     plot_gmvp_sharpe(df, outdir, methods, roll_window=roll_window)

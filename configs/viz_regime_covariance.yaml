@@ -12,6 +12,8 @@ plot:
   winroll_window: 63
 
   methods: ["model", "mix", "roll", "shrink", "pers"]
+  # GMVP wealth plot only (omit mix so model vs baselines is easier to read)
+  equity_methods: ["model", "roll", "shrink", "pers"]
   # methods: ["model","mix", "shrink"]
 
   # Two "reference methods" to measure skill/winrate vs all others.
