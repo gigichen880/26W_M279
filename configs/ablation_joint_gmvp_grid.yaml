@@ -1,0 +1,51 @@
+# Joint GRID ablation for GMVP-relevant knobs (covariance pipeline).
+# mode: grid → Cartesian product of all axes (every combination).
+#
+# After the run, build a **Pareto** report (no scalar J):
+#   python -m scripts.analysis.ablation.pareto_gmvp_report \\
+#       --summary results/regime_covariance/ablation_joint_gmvp/ablation_summary.csv
+#
+# Or one command:
+#   python -m scripts.analysis.ablation.run_joint_gmvp_grid
+#
+# Objectives in pareto_gmvp_report (model only, **mean over dates**):
+#   maximize model_gmvp_sharpe_mean
+#   minimize model_gmvp_var_mean
+#   minimize model_turnover_l1_mean
+#
+# Expand axes (e.g. embedder.pca_k, model.knn_metric dict choices) carefully — runtime multiplies.
+
+base_config: "regime_covariance.yaml"
+
+mode: grid
+
+# Optional: keep for ranking column only (Pareto script ignores this for selection)
+objective: model_gmvp_sharpe_mean
+
+overrides:
+  data:
+    start_date: "2015-01-01"
+    end_date: "2021-12-31"
+  backtest:
+    stride: 5
+    refit_mode: "days"
+    refit_every_days: 20
+
+axes:
+  tau:
+    key: model.tau
+    choices:
+      - 1.0
+      - 1.5
+      - 2.0
+      - 2.5
+      - 3.0
+  k_neighbors:
+    key: backtest.k_neighbors
+    choices:
+      - 20
+      - 30
+      - 40
+
+outputs:
+  outdir: "results/regime_covariance/ablation_joint_gmvp"

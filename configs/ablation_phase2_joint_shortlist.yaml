@@ -1,0 +1,72 @@
+# =============================================================================
+# Phase 2 — Small joint grid on a SHORTLIST + Pareto (model GMVP metrics)
+# =============================================================================
+# After Phase 1 marginals, replace the default choices below with your survivors
+# (e.g. 2 clusterers × 3 knn metrics × 2 embedders × τ × k).
+#
+# Default size: 2 × 3 × 2 × 2 × 2 = 48 full backtests (edit lists to grow/shrink).
+#
+# Run:
+#   python -m scripts.analysis.ablation.run_ablation --config configs/ablation_phase2_joint_shortlist.yaml --plots none
+#   python -m scripts.analysis.ablation.pareto_gmvp_report \\
+#       --summary results/regime_covariance/ablation_phase2_joint/ablation_summary.csv
+# Or:
+#   python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 2
+#
+# Phase 0 (optional, τ×k only on base config): use ablation_joint_gmvp_grid.yaml or:
+#   python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 0
+# =============================================================================
+
+base_config: "regime_covariance.yaml"
+
+mode: grid
+
+objective: model_gmvp_sharpe_mean
+
+overrides:
+  data:
+    start_date: "2015-01-01"
+    end_date: "2021-12-31"
+  backtest:
+    stride: 5
+    refit_mode: "days"
+    refit_every_days: 20
+
+axes:
+  # SHORTLIST: edit after Phase 1 — defaults are conservative
+  regime_clustering:
+    key: model.regime_clustering
+    choices:
+      - label: agglomerative_ward
+        model.regime_clustering:
+          name: agglomerative_ward
+          params: {}
+      - label: fuzzy_cmeans
+        model.regime_clustering:
+          name: fuzzy_cmeans
+          params: {}
+
+  knn_metric:
+    key: model.knn_metric
+    choices:
+      - l1
+      - label: lp_p1
+        model.knn_metric: lp
+        model.knn_lp_p: 1
+
+  pca_k:
+    key: embedder.pca_k
+    choices:
+      - 40
+      - 48
+
+  tau:
+    key: model.tau
+    choices: [1.0, 2.0]
+
+  k_neighbors:
+    key: backtest.k_neighbors
+    choices: [10, 50]
+
+outputs:
+  outdir: "results/regime_covariance/ablation_phase2_joint"

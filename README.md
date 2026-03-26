@@ -399,6 +399,7 @@ Two dedicated ablations isolate **which part of the pipeline** you are changing:
 | **kNN / embedding distance** | Stage 4 — nearest neighbors in embedding space | `model.knn_metric` (and `model.knn_lp_p` when metric is `lp`) | Chooses how distance \(d(z_t, z_i)\) is computed before the kernel \(\kappa_i = \exp(-d_i/\tau)\). Choices include `l2`, `l1`, `cosine`, `angular`, `chebyshev`, and labeled Lp runs `lp_p1`…`lp_p4` (`knn_metric: lp` + integer `knn_lp_p`). **`model.tau`** is not swept by default; distance scales differ by metric. |
 | **Regime clustering** | Stage 2 — soft regime memberships \(\pi_t(k)\) on training embeddings | `model.regime_clustering.name` and `model.regime_clustering.params` | Selects the backend (`gmm`, `kmeans_soft`, `spectral_rbf`, `spectral_knn`, `agglomerative_ward`, `fuzzy_cmeans`, `modified_two_stage`, `signed_knn_spectral`). **`params`** holds method-specific hyperparameters (e.g. `fuzziness` for fuzzy c-means, `n_neighbors` for spectral KNN). **`model.n_regimes`** and **`model.random_state`** always come from the top-level `model:` block, not from `regime_clustering`. |
 | **PCA dimension** | Stage 1 — width of the PCA window embedding | `embedder.pca_k` (with `embedder.name: pca`) | Number of components \(D\) in `PCAWindowEmbedder`. Sweep with [§4e](#4e-pca-embedding-dimension-pca_k); pick \(D\) by validation metrics (Fro, Sharpe, turnover) jointly. |
+| **τ × k Pareto** | Stages 4–5 — kernel scale + neighbor count | `model.tau`, `backtest.k_neighbors` | Full **grid** (`mode: grid`), then **Pareto** on mean model Sharpe / GMVP var / turnover ([§4f](#4f-joint-grid-tau--k_neighbors--pareto-gmvp-report)). No scalar \(J\); choose on the frontier. |
 
 **Shared ablation YAML mechanics** (both sweeps): `base_config` loads a full run config; `overrides` is merged for every run (shorter dates, stride, refit cadence); `mode: one_at_a_time` runs one choice per axis while holding the rest at base values.
 
@@ -407,7 +408,9 @@ Two dedicated ablations isolate **which part of the pipeline** you are changing:
 - **Distance only:** [§4c — kNN embedding distance ablation](#4c-knn-embedding-distance-ablation) — configs [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml), [`configs/ablation_volatility.yaml`](configs/ablation_volatility.yaml); optional model-only figure via `plot_knn_metric_ablation`.
 - **Clustering only:** [§4d — Regime clustering method ablation](#4d-regime-clustering-method-ablation) — `python -m scripts.analysis.ablation.run_regime_clustering_ablation` or [`configs/ablation_regime_clustering.yaml`](configs/ablation_regime_clustering.yaml); table of per-method `params` used in the default sweep.
 - **PCA \(D\):** [§4e — `pca_k` ablation](#4e-pca-embedding-dimension-pca_k) — `python -m scripts.analysis.ablation.run_pca_k_ablation` or [`configs/ablation_pca_k.yaml`](configs/ablation_pca_k.yaml).
-- **Full design grid** (embedder, transition, distance, regime aggregation/weighting): [§4b](#4b-pipeline-design-ablation-one-axis-at-a-time).
+- **Joint τ × k + Pareto GMVP:** [§4f](#4f-joint-grid-tau--k_neighbors--pareto-gmvp-report) — `run_joint_gmvp_grid` / [`configs/ablation_joint_gmvp_grid.yaml`](configs/ablation_joint_gmvp_grid.yaml).
+- **Phased workflow (marginals → shortlist joint grid → Pareto):** [§4g](#4g-phased-covariance-ablation-k-regimes-separate) — [`run_phased_covariance_ablation`](scripts/analysis/ablation/run_phased_covariance_ablation.py).
+- **Full design grid** (embedder, transition, distance, regime aggregation/weighting): [§4b](#4b-pipeline-design-ablation-one-axis-at-a-time) — largely superseded for cov by Phase 1 YAML (see §4g).
 
 ### 1. Main Backtest (Walk-Forward Evaluation)
 
@@ -527,7 +530,7 @@ python -m scripts.analysis.ablation.run_ablation --config configs/ablation_volat
 
 - `results/regime_covariance/ablation/ablation_summary.csv` (cov) or `results/regime_volatility/ablation/ablation_summary.csv` (vol) — one row per axis/choice with primary metric mean (e.g. `model_fro`, `mix_fro` for cov; `model_vol_mse` for vol) and optional extra metrics.
 - Full per-choice time-series backtests under `results/<tag>/ablation/runs/<axis>/<choice>.parquet` (or `.csv`).
-- Ablation figures under `results/<tag>/figs/ablation/`:
+- Ablation figures under `<outputs.outdir>/figs/` (e.g. `results/regime_covariance/ablation/figs/` when using default outdir), including `axis_*_model_only.png` for each one-at-a-time axis:
   - `ablation_summary.png` (bar chart)
   - `<axis>/..._timeseries_overlay.png`, `cumadv_*_overlay.png` (choices overlaid for easy comparison)
 
@@ -593,7 +596,7 @@ python -m scripts.analysis.ablation.run_ablation --config configs/ablation_covar
 python -m scripts.analysis.ablation.run_ablation --config configs/ablation_volatility.yaml
 ```
 
-**Outputs:** rows with `axis == knn_metric` in `results/regime_covariance/ablation/ablation_summary.csv` (or `results/regime_volatility/ablation/...`), per-choice backtests under `results/<tag>/ablation/runs/knn_metric/<choice>/`, and overlay figures under `results/<tag>/figs/ablation/knn_metric/`.
+**Outputs:** rows with `axis == knn_metric` in `<outputs.outdir>/ablation_summary.csv` (e.g. `results/regime_covariance/ablation/...`), per-choice backtests under `<outputs.outdir>/runs/knn_metric/<choice>/`, and overlay figures under `<outputs.outdir>/figs/knn_metric/` (plus `axis_knn_metric_model_only.png` when plots are enabled).
 
 **Model-only figure (4-panel bars from the summary CSV):**
 
@@ -693,6 +696,106 @@ python -m scripts.analysis.ablation.run_pca_k_ablation --plots none --verbose   
 - `results/regime_covariance/ablation_pca_k/ablation_summary.csv`
 - `results/regime_covariance/ablation_pca_k/figs/pca_k_ablation_model_only.png` (model-only four-panel bars)
 - `results/regime_covariance/ablation_pca_k/runs/pca_k/<k>/` — per-`k` backtest series
+
+---
+
+### 4f. Joint grid (`tau` × `k_neighbors`) + **Pareto** GMVP report
+
+For **portfolio** tradeoffs (no single scalar \(J\)), run a small **full grid** and then a **Pareto** analysis on **model** time-series means:
+
+| Objective | Direction |
+| --------- | --------- |
+| `model_gmvp_sharpe_mean` | higher better |
+| `model_gmvp_var_mean` | lower better |
+| `model_turnover_l1_mean` | lower better |
+
+A grid point is **Pareto-efficient** if no other point is ≥ on Sharpe, ≤ on variance, and ≤ on turnover, with **strict** improvement in at least one. You **choose** a point on that frontier (or add another axis later), instead of baking weights into one \(J\).
+
+**Default axes** ([`configs/ablation_joint_gmvp_grid.yaml`](configs/ablation_joint_gmvp_grid.yaml)):
+
+- `model.tau` — kNN kernel scale \(\kappa = \exp(-d/\tau)\)
+- `backtest.k_neighbors` — neighbor count \(k\)
+
+Default Cartesian product: **5 × 3 = 15** walk-forward runs (with the same short-window `overrides` as other ablations). Edit the YAML to add more axes (e.g. `embedder.pca_k`); cost multiplies.
+
+#### Should clustering, distance, or embedder go in the **same** grid?
+
+**You can, but usually not all at once.** A full grid multiplies run count:
+
+\[
+\text{\#runs} = \prod_{\text{axes}} |\text{choices}|
+\]
+
+Example: 8 clusterings × 9 `knn_metric` variants × 2 embedders × 5 τ × 3 \(k\) = **2 160** walk-forward jobs. That is why the repo keeps **one-at-a-time** ablations for those axes and a **small** joint grid for τ × \(k\) first.
+
+**Practical workflow**
+
+1. **Phase 1 (already have):** marginal ablations — `regime_clustering`, `knn_metric`, `embedder.name` / `pca_k`, etc. — to eliminate weak options.
+2. **Phase 2:** fix **discrete** choices to a **shortlist** (e.g. 2 clusterers × 3 metrics × 2 embedders) and combine **only with** τ × \(k\) in `mode: grid`. Keep the product under a budget (tens to low hundreds of runs).
+3. **Phase 3:** optional **coordinate descent** — freeze everything at the Phase-2 winner, re-sweep one axis, repeat — cheaper than a megagrid and handles **interactions** better than three independent “bests.”
+
+**YAML mechanics** (same as [`run_ablation.py`](scripts/analysis/ablation/run_ablation.py)):
+
+| Axis | `key` or dict `choices` |
+| ---- | ------------------------ |
+| Embedder family | `key: embedder.name`, `choices: [pca, corr_eig]` |
+| PCA width | `key: embedder.pca_k`, `choices: [16, 24, 32]` (use with `embedder.name: pca` in `overrides` or per-choice dict) |
+| kNN metric | dict choices with dotted keys, e.g. `label: l2` + `model.knn_metric: l2`, or `label: lp_p3` + `model.knn_metric: lp` + `model.knn_lp_p: 3` (see [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml)) |
+| Regime clustering | dict per choice: `label: gmm` and `model.regime_clustering: {name: gmm, params: {}}` (nested mapping under `model.regime_clustering`) |
+
+**Pareto step:** [`pareto_gmvp_report`](scripts/analysis/ablation/pareto_gmvp_report.py) still uses **three model objectives** (Sharpe, GMVP var, turnover means). Adding axes only grows the **cloud** of points; the frontier can get **more** nondominated points (richer tradeoffs), not a single automatic winner.
+
+**Run:**
+
+```bash
+python -m scripts.analysis.ablation.run_joint_gmvp_grid
+python -m scripts.analysis.ablation.run_joint_gmvp_grid --plots none --verbose
+# Recompute figures from an existing summary only:
+python -m scripts.analysis.ablation.run_joint_gmvp_grid --pareto-only
+```
+
+**Pareto only** (if you already have `ablation_summary.csv` from `mode: grid`):
+
+```bash
+python -m scripts.analysis.ablation.pareto_gmvp_report \\
+  --summary results/regime_covariance/ablation_joint_gmvp/ablation_summary.csv \\
+  --outdir results/regime_covariance/ablation_joint_gmvp/pareto
+```
+
+**Outputs:**
+
+- `ablation_summary.csv` — one row per \((\tau, k)\) with `mode=grid` and metric means
+- `runs/__grid__/*.parquet` — full backtest per combination
+- `pareto/grid_with_pareto_flags.csv` — all grid rows + `is_pareto`
+- `pareto/pareto_frontier.csv` — nondominated subset
+- `pareto/pareto_2d_sharpe_vs_turnover.png`, `pareto_2d_sharpe_vs_var.png`, `pareto_3d_sharpe_var_turnover.png`, optional Fro diagnostic bar chart
+
+---
+
+### 4g. Phased covariance ablation (K-regimes separate)
+
+End-to-end workflow that **merges** the old split configs (except **`n_regimes` / K**, which stays in [`run_k_ablation`](scripts/analysis/ablation/run_k_ablation.py)):
+
+| Phase | Config | What it does |
+| ----- | ------ | ------------- |
+| **0** (optional) | [`ablation_joint_gmvp_grid.yaml`](configs/ablation_joint_gmvp_grid.yaml) | Joint **τ × k** on the base stack + **Pareto** GMVP report (probe similarity layer only). |
+| **1** | [`ablation_phase1_covariance.yaml`](configs/ablation_phase1_covariance.yaml) | **One-at-a-time** marginals: `embedder.name`, `embedder.pca_k`, **regime clustering** (8 backends), **`knn_metric`**, **`k_neighbors`**, **`model.tau`**, `transition_estimator`, `regime_aggregation`, `regime_weighting`. Superset of [`ablation_covariance.yaml`](configs/ablation_covariance.yaml) + clustering + PCA-k + k-neighbors + τ. |
+| **2** | [`ablation_phase2_joint_shortlist.yaml`](configs/ablation_phase2_joint_shortlist.yaml) | **Grid** on a **shortlist** you edit after Phase 1 (default **48** runs: 2 clusterers × 3 metrics × 2 embedders × 2 τ × 2 k). Then **Pareto** on model Sharpe / GMVP var / turnover. |
+| **3** | — | **Coordinate descent** (manual): copy Phase-2 pick into `regime_covariance.yaml`, then re-sweep single axes or mini-grids. `--phase 3` prints the checklist. |
+
+**Orchestrator:**
+
+```bash
+python -m scripts.analysis.ablation.run_phased_covariance_ablation --dry-run
+python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 0   # τ×k + Pareto
+python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 1 --plots summary
+python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 2 --plots none
+python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 3   # instructions only
+```
+
+**Outputs:** `results/regime_covariance/ablation_phase1_covariance/`, `ablation_phase2_joint/` (each with `ablation_spec_resolved.yaml` + `ablation_summary.csv`; Phase 0/2 also `pareto/` when Pareto runs).
+
+**Still standalone (unchanged):** [`ablation_volatility.yaml`](configs/ablation_volatility.yaml), [`ablation_k_neighbors_covariance.yaml`](configs/ablation_k_neighbors_covariance.yaml) (narrower k sweep), [`run_regime_clustering_ablation`](scripts/analysis/ablation/run_regime_clustering_ablation.py) (auto-syncs clustering names from code), [`run_pca_k_ablation`](scripts/analysis/ablation/run_pca_k_ablation.py) (full `pca_k` list without other axes).
 
 ---
 
@@ -799,6 +902,9 @@ After running complete pipeline:
 - `results/regime_covariance/ablation/ablation_summary.csv` - Design ablation summary (includes kNN distance axis when using `ablation_covariance.yaml`)
 - `results/regime_covariance/ablation_regime_clustering/ablation_summary.csv` - Regime clustering method ablation
 - `results/regime_covariance/ablation_pca_k/ablation_summary.csv` - PCA embedding dimension (`pca_k`) ablation
+- `results/regime_covariance/ablation_joint_gmvp/ablation_summary.csv` - Joint grid (e.g. τ × k); see `pareto/` for frontier CSVs and figures
+- `results/regime_covariance/ablation_phase1_covariance/ablation_summary.csv` - Phased workflow Phase 1 (cov marginals)
+- `results/regime_covariance/ablation_phase2_joint/ablation_summary.csv` - Phased workflow Phase 2 (shortlist grid); `pareto/` for GMVP Pareto
 
 **Key Figures (covariance example, all under `results/regime_covariance/figs/`):**
 

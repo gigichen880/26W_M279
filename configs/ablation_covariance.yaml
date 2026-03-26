@@ -1,5 +1,9 @@
 # Ablation over design choices for covariance forecasting.
 # One-at-a-time: for each axis, each choice is run; others at base config values.
+#
+# For the full staged workflow (marginals + shortlist joint grid + Pareto), prefer:
+#   configs/ablation_phase1_covariance.yaml  (superset: design + clustering + pca_k + k + tau + …)
+#   python -m scripts.analysis.ablation.run_phased_covariance_ablation
 
 base_config: "regime_covariance.yaml"
 

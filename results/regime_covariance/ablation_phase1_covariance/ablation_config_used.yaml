@@ -1,0 +1,30 @@
+base_config: /Users/zhiyichen/Desktop/26W_M279/configs/regime_covariance.yaml
+mode: one_at_a_time
+overrides:
+  data:
+    start_date: '2015-01-01'
+    end_date: '2021-12-31'
+  backtest:
+    stride: 5
+    refit_mode: days
+    refit_every_days: 20
+axes:
+  k_neighbors:
+    key: backtest.k_neighbors
+    choices:
+    - 10
+    - 15
+    - 20
+    - 30
+    - 40
+    - 50
+  tau:
+    key: model.tau
+    choices:
+    - 1.0
+    - 1.5
+    - 2.0
+    - 2.5
+    - 3.0
+outputs:
+  outdir: /Users/zhiyichen/Desktop/26W_M279/results/regime_covariance/ablation_phase1_covariance

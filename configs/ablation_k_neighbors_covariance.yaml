@@ -1,4 +1,5 @@
 # Ablation: sweep number of kNN neighbors (covariance).
+# Broader phased marginal: configs/ablation_phase1_covariance.yaml (axes: k_neighbors, tau, …).
 # Holds pipeline decisions fixed to:
 #   transition_estimator=soft, knn_metric=l2, embedder=pca, regime_weighting=raw_pi, regime_aggregation=soft
 

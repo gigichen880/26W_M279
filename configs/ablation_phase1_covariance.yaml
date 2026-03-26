@@ -1,0 +1,126 @@
+# =============================================================================
+# Phase 1 — Covariance marginals (one axis at a time)
+# =============================================================================
+# Combines the old split configs in one place (K-regime ablation is separate):
+#   - Design: embedder.name, transition_estimator, knn_metric, regime_aggregation,
+#             regime_weighting  (was ablation_covariance.yaml)
+#   - Regime clustering backends  (was ablation_regime_clustering.yaml)
+#   - PCA width D  (subset of ablation_pca_k — extend choices if needed)
+#   - kNN neighbor count  (subset of ablation_k_neighbors_covariance.yaml)
+#   - Kernel temperature τ  (marginal; joint τ×k is Phase 0 / ablation_joint_gmvp_grid.yaml)
+#
+# mode: one_at_a_time → total runs = sum of len(choices) per axis (not product).
+#
+# Run:
+#   python -m scripts.analysis.ablation.run_ablation --config configs/ablation_phase1_covariance.yaml --plots summary
+# Or:
+#   python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 1
+# Figures (default with phased runner): <outputs.outdir>/figs/axis_<axis>_model_only.png,
+#   axis_pairwise_bars_<axis>.png, ablation_summary.png — co-located with ablation_summary.csv.
+#
+# After Phase 1, edit SHORTLIST_* in configs/ablation_phase2_joint_shortlist.yaml, then run Phase 2.
+# =============================================================================
+
+base_config: "regime_covariance.yaml"
+
+mode: one_at_a_time
+
+overrides:
+  data:
+    start_date: "2015-01-01"
+    end_date: "2021-12-31"
+  backtest:
+    stride: 5
+    refit_mode: "days"
+    refit_every_days: 20
+
+axes:
+  # embedder:
+  #   key: embedder.name
+  #   choices: [pca, corr_eig]
+
+  # pca_k:
+  #   key: embedder.pca_k
+  #   choices: [8, 12, 16, 24, 32, 40, 48]
+
+  # regime_clustering:
+  #   key: model.regime_clustering
+  #   choices:
+  #     - label: gmm
+  #       model.regime_clustering:
+  #         name: gmm
+  #         params: {}
+  #     - label: kmeans_soft
+  #       model.regime_clustering:
+  #         name: kmeans_soft
+  #         params: {}
+  #     - label: spectral_rbf
+  #       model.regime_clustering:
+  #         name: spectral_rbf
+  #         params: {}
+  #     - label: spectral_knn
+  #       model.regime_clustering:
+  #         name: spectral_knn
+  #         params:
+  #           n_neighbors: 10
+  #     - label: agglomerative_ward
+  #       model.regime_clustering:
+  #         name: agglomerative_ward
+  #         params: {}
+  #     - label: fuzzy_cmeans
+  #       model.regime_clustering:
+  #         name: fuzzy_cmeans
+  #         params: {}
+  #     - label: modified_two_stage
+  #       model.regime_clustering:
+  #         name: modified_two_stage
+  #         params: {}
+  #     - label: signed_knn_spectral
+  #       model.regime_clustering:
+  #         name: signed_knn_spectral
+  #         params:
+  #           n_neighbors: 15
+
+  # knn_metric:
+  #   key: model.knn_metric
+  #   choices:
+  #     - l2
+  #     - l1
+  #     - cosine
+  #     - angular
+  #     - chebyshev
+  #     - label: lp_p1
+  #       model.knn_metric: lp
+  #       model.knn_lp_p: 1
+  #     - label: lp_p2
+  #       model.knn_metric: lp
+  #       model.knn_lp_p: 2
+  #     - label: lp_p3
+  #       model.knn_metric: lp
+  #       model.knn_lp_p: 3
+  #     - label: lp_p4
+  #       model.knn_metric: lp
+  #       model.knn_lp_p: 4
+
+  k_neighbors:
+    key: backtest.k_neighbors
+    choices: [10, 15, 20, 30, 40, 50]
+
+  tau:
+    key: model.tau
+    choices: [1.0, 1.5, 2.0, 2.5, 3.0]
+
+  # transition_estimator:
+  #   key: model.transition_estimator
+  #   choices: [hard, soft]
+
+  # regime_aggregation:
+  #   key: model.regime_aggregation
+  #   choices: [soft, hard]
+
+  # regime_weighting:
+  #   key: model.regime_weighting
+  #   choices: [filtered, raw_pi]
+
+outputs:
+  outdir: "results/regime_covariance/ablation_phase1_covariance"

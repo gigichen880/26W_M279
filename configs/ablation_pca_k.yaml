@@ -1,4 +1,5 @@
 # Walk-forward ablation: PCA embedding dimension D = embedder.pca_k (Stage 1).
+# Also included (with more axes) in configs/ablation_phase1_covariance.yaml (phased workflow).
 # Holds the rest of the stack fixed (from base_config + overrides).
 #
 # Run (from repo root):

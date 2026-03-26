@@ -1,4 +1,7 @@
-# Regime clustering ablation. Prefer auto-generated spec (stays in sync with code):
+# Regime clustering ablation only. For full cov marginals (clustering + distance + …), use:
+#   configs/ablation_phase1_covariance.yaml
+#
+# Auto-generated spec (stays in sync with code):
 #   python -m scripts.analysis.ablation.run_regime_clustering_ablation
 #
 # Or run this file:

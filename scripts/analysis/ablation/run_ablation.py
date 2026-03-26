@@ -11,6 +11,8 @@ Records summary metrics (primary metric mean for model/mix and GMVP metrics for 
 Use to isolate or tune:
   - embedder (pca, corr_eig, vol_stats for vol)
   - embedder.pca_k (PCA dimension D; see configs/ablation_pca_k.yaml / run_pca_k_ablation.py)
+  - mode: grid — Cartesian product of axes (e.g. model.tau × backtest.k_neighbors; see configs/ablation_joint_gmvp_grid.yaml + pareto_gmvp_report.py)
+  - Phased cov workflow: configs/ablation_phase1_covariance.yaml, ablation_phase2_joint_shortlist.yaml; runner: run_phased_covariance_ablation.py
   - transition_estimator (hard vs soft)
   - knn_metric (scalars or dict choices to set model.knn_metric + model.knn_lp_p together)
   - regime_aggregation (soft vs hard)
@@ -295,7 +297,8 @@ def run_ablation(
     if plots == "none":
         return summary
 
-    figs_dir = os.path.join("results", tag, "figs", "ablation")
+    # Co-locate figures with the ablation run (summary CSV lives in out_dir)
+    figs_dir = os.path.join(out_dir, "figs")
     os.makedirs(figs_dir, exist_ok=True)
 
     try:
@@ -538,6 +541,16 @@ def run_ablation(
         os.makedirs(os.path.dirname(outpath), exist_ok=True)
         plt.savefig(outpath, dpi=200, bbox_inches="tight")
         plt.close()
+
+    # Model-only 4-panel figures per OAT axis (any plots level except none)
+    if plots != "none" and str(mode).lower() == "one_at_a_time":
+        try:
+            from scripts.analysis.ablation.plot_oat_ablation_axes import plot_oat_axes_from_summary
+
+            for p in plot_oat_axes_from_summary(csv_path, figs_dir=figs_dir):
+                print(f"Saved: {p}")
+        except Exception as e:
+            print(f"(warn) Failed to plot model-only OAT axis figures: {e}")
 
     if plots in {"per_run", "all"}:
         for axis_name, axis_spec in axes_cfg.items():
