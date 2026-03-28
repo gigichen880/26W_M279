@@ -1,935 +1,175 @@
-# Similarity-Based Covariance Forecasting for US Equities
+# Similarity-Based Covariance Forecasting (US Equities)
 
-## Project Overview
+Regime-aware **kNN similarity** in embedding space forecasts covariance (or volatility), evaluated in a **walk-forward** backtest with **GMVP** portfolio metrics and classical baselines (rolling, persistence, shrinkage).
 
-This project implements similarity-based covariance forecasting for US equities using daily/minutely return data. We build a clean universe of high-quality stocks, extract returns, and (in the pipeline phase) apply SPD geometry, regime detection, and GMVP backtesting against baselines (HAR, DCC-GARCH, Ledoit-Wolf).
+**Core code:** `similarity_forecast/` (embeddings, regimes, aggregation) · **`run_backtest.py`** (full evaluation loop).
 
-## Project Structure
+---
 
-```
-26W_M279/
-├── data/               # Dataset storage (raw, processed, universes, docs)
-├── scripts/            # Data processing and analysis scripts
-│   ├── data_extraction/
-│   ├── universe_selection/
-│   ├── data_validation/
-│   └── analysis/
-├── notebooks/          # Jupyter notebooks for EDA
-├── results/            # Analysis outputs (figures, reports, latex_tables)
-├── docs/               # General documentation (see FILE_ORGANIZATION_RULES.md)
-├── archive/            # Old attempts (gitignored)
-└── similarity_forecast/  # Main forecasting pipeline
+## Quick start
+
+```bash
+pip install -r requirements.txt
 ```
 
-## Repository Organization
+Large processed returns (`data/processed/*.parquet`) are gitignored—obtain data separately if you clone fresh.
 
-See [docs/FILE_ORGANIZATION_RULES.md](docs/FILE_ORGANIZATION_RULES.md) for detailed file organization rules.
+### Main backtest (primary entry point)
 
-**Quick reference:**
+```bash
+# Covariance: model, mix, roll, pers, shrink + matrix & GMVP metrics
+python run_backtest.py --config configs/regime_covariance.yaml
 
-- **Data:** `data/raw/`, `data/processed/`, `data/universes/`, `data/docs/`
-- **Scripts:** `scripts/data_extraction/`, `scripts/universe_selection/`, `scripts/data_validation/`, `scripts/analysis/`
-- **Results:** `results/eda/figures/`, `results/eda/reports/`, `results/latex_tables/`
-- **Documentation:** `data/docs/`, `docs/`
+# Volatility target (scalar vol metrics; no GMVP)
+python run_backtest.py --config configs/regime_volatility.yaml
+```
 
-**Do not commit:** Large data (e.g. `.parquet` in data/raw and data/processed), `archive/`, generated figures under `results/eda/figures/`.
+**Outputs (canonical layout):** `results/<tag>/` with `tag` from the config (e.g. `regime_covariance`).
+
+| Artifact | Description |
+|----------|-------------|
+| `backtest.parquet`, `backtest.csv` | Per–refit-date metrics for all methods |
+| `report.csv` | Means by method (Fro, Stein, GMVP Sharpe/var, turnover, …) |
+| `config_used.yaml` | Resolved config snapshot |
+
+Typical runtime: on the order of **minutes** for the default date range and stride (machine-dependent).
+
+### Regenerate figures from an existing backtest
+
+```bash
+python -m scripts.analysis.run_all --target covariance
+python -m scripts.analysis.run_all --target volatility
+```
+
+This runs visualization, statistical comparison, and regime scripts against **`results/<tag>/backtest.*`** (does **not** re-run the backtest). Options: `--skip-stats`, `--skip-viz`, `--skip-regime`, `--skip-ablation-figs`.
+
+**Individual steps (covariance):**
+
+```bash
+python -m scripts.analysis.core.visualize_backtest_results --config configs/viz_regime_covariance.yaml
+python -m scripts.analysis.core.visualize_statistical_comparison --input results/regime_covariance/backtest.parquet --target covariance
+```
+
+---
+
+## Key results (where to look)
+
+### Tables
+
+| File | Use |
+|------|-----|
+| `results/regime_covariance/report.csv` | **Primary** summary: mean errors + GMVP stats by method |
+| `results/regime_covariance/figs/statistical_comparison/*_meanbars.png` | Paired **t**-tests: model/mix vs baselines |
+| `results/regime_covariance/figs/statistical_comparison/forecast_correlation.png` | Correlation of forecasts across methods |
+
+### Figures (covariance)
+
+| Path | Content |
+|------|---------|
+| `figs/raw_temporal/equity_curves_gmvp.png` | Cumulative GMVP wealth (methods configurable via `equity_methods` in `configs/viz_regime_covariance.yaml`) |
+| `figs/raw_temporal/method_overlays.png` | Metric time series |
+| `figs/raw_temporal/covariance_error_fro_timeseries.png` | Frobenius error over time |
+| `figs/regime/` | Regime timeline, transition matrix, performance by regime |
+
+### Paper-style numbers (terminal wealth & mean horizon Sharpe)
+
+```bash
+python -m scripts.analysis.summarize_gmvp_equity_stats --input results/regime_covariance/backtest.csv
+```
+
+Chains `{method}_gmvp_cumret` into terminal wealth and reports mean `{method}_gmvp_sharpe` with **% vs baselines**.
+
+### Phase 2 joint grid (shortlist + Pareto)
+
+After `ablation_phase2_joint` runs: `ablation_summary.csv`, `pareto/pareto_frontier.csv`, Pareto scatter plots. **Paper-ready bar charts** (16 configs after deduping `l1` ≡ `lp_p1`):
+
+```bash
+python -m scripts.analysis.ablation.grid_ablation_metric_figs \
+  --summary results/regime_covariance/ablation_phase2_joint/ablation_summary.csv \
+  --report
+```
+
+→ `figs_grid_metrics_report/` + `deduped_grid_summary.csv`.
+
+### Mixing weights sweep (optional)
+
+```bash
+python -m scripts.analysis.sweep_cov_mix_weights --two-way --step 0.1 --plot
+```
+
+Writes `results/<tag>/sweep_mix_weights/sweep_mix_weights.csv` and Pareto-style picks.
+
+---
+
+## Pipeline overview
+
+1. **Embed** rolling return windows (`PCAWindowEmbedder`, `CorrEigenEmbedder`, …).
+2. **Regime assignment** (GMM, fuzzy c-means, etc.) → soft memberships \(\pi_t\).
+3. **Filter** regime posteriors with a transition matrix (optional soft transitions).
+4. **kNN** in embedding space with kernel \(\kappa \propto \exp(-d/\tau)\).
+5. **Aggregate** neighbor covariances (e.g. log-Euclidean) with regime-aware weights.
+
+**GMVP** weights are computed from each method’s covariance (or precision) forecast; **mix** blends model + shrink (+ optional persistence) via `mixing.mix_lambda` or `mixing.cov_mix_weights`.
+
+Details: [docs/MODEL_VS_MIX_DESIGN.md](docs/MODEL_VS_MIX_DESIGN.md), [docs/DIAGNOSIS_GMVP_VARIANCE.md](docs/DIAGNOSIS_GMVP_VARIANCE.md), [docs/REGIME_ANALYSIS_GUIDE.md](docs/REGIME_ANALYSIS_GUIDE.md).
+
+---
+
+## Hyperparameter & design experiments
+
+| Workflow | Command / config |
+|----------|------------------|
+| **Phased covariance** (marginals → joint shortlist → Pareto) | `python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 1` (or `0`, `2`, `3`) · configs `ablation_phase1_covariance.yaml`, `ablation_phase2_joint_shortlist.yaml` |
+| **Joint τ × k + Pareto** | `python -m scripts.analysis.ablation.run_joint_gmvp_grid` · `configs/ablation_joint_gmvp_grid.yaml` |
+| **Pareto only** (existing grid summary) | `python -m scripts.analysis.ablation.pareto_gmvp_report --summary <path>/ablation_summary.csv` |
+| **One-at-a-time** design axes | `python -m scripts.analysis.ablation.run_ablation --config configs/ablation_covariance.yaml` |
+| **K regimes** | `python -m scripts.analysis.ablation.run_k_ablation --config configs/regime_covariance.yaml` |
+
+Phase 2 default grid size in YAML may differ from your run; see `ablation_phase2_joint_shortlist.yaml`.
+`read_parquet` failures: `scripts/analysis/utils/backtest_io.py` falls back to CSV when present.
+
+---
 
 ## Data
 
-- **Source**: NYSE + NASDAQ daily returns (2007–2021); minutely data from archives for quality filtering.
-- **Universe**: 100 stocks including major tech, financials, healthcare.
-- **Availability**: ~98.5% mean data coverage for the final universe.
-
-### Data Files
-
-- `data/processed/returns_universe_100.parquet`: Final 100-stock returns matrix (gitignored; large).
-- `data/processed/minutely_daily_returns.parquet`: Daily returns from minutely data (515 stocks; gitignored).
-- `data/universes/FINAL_UNIVERSE_100_FINAL.csv`: List of selected 100 tickers (tracked).
-- `data/universes/FINAL_UNIVERSE_metadata.txt`: Selection criteria and stats (tracked).
-
-## Setup
-
-1. Clone the repository.
-2. Install dependencies: `pip install -r requirements.txt`
-3. Data files are gitignored due to size. Contact the team for access (e.g. Dropbox or shared drive).
-
-## Usage
-
-### Data Processing (already run)
-
-```bash
-# Build pvCLCL matrix from raw CSVs (data-dir = data/raw or unzipped source)
-python scripts/data_extraction/build_pvclcl_matrix.py --data-dir data/raw --out-parquet data/processed/pvCLCL_matrix.parquet
-
-# Extract daily returns from minutely .7z archives (writes to results/eda/reports)
-python scripts/data_extraction/minutely_extraction_pipeline.py
-
-# Select final universe (reads quality from results/eda/reports, writes to data/universes/)
-python scripts/universe_selection/select_final_universe.py
-```
-
-### EDA
-
-```bash
-jupyter notebook notebooks/data_prep_eda.ipynb
-```
-
-## Main Pipeline (5-Stage Regime-Aware Similarity)
-
-The regime-aware similarity forecasting engine lives under `similarity_forecast/`.
-
-This module implements a **5-stage regime-aware similarity framework** for volatility, covariance, and correlation forecasting.
-
-```bash
-python run_regime_covariance.py
-```
-
-For each anchor time $t$:
-
-### Stage 1 — Window Embedding
-
-We construct a rolling lookback window of returns:
-
-$$
-X_t = R_{t-L+1:t}
-$$
-
-and compute an embedding:
-
-$$
-z_t = f(X_t)
-$$
-
-Embeddings are implemented in:
-
-```
-similarity_forecast/embeddings.py
-```
-
-Examples:
-
-- `CorrEigenEmbedder`
-- `VolStatsEmbedder`
-
-### Stage 2 — Regime Inference (GMM)
-
-We fit a Gaussian Mixture Model (GMM) on the embedding space:
-
-$$
-\pi_t(k) = P(s_t = k \mid z_t)
-$$
-
-This produces **soft regime probabilities**.
-
-Implemented in:
-
-```
-similarity_forecast/regimes.py
-```
-
-### Stage 3 — Transition Estimation & Filtering
-
-We estimate a regime transition matrix:
-
-$$
-A_{ij} = P(s_t = j \mid s_{t-1} = i)
-$$
-
-Then compute filtered regime posteriors:
-
-$$
-\alpha_t \propto (\alpha_{t-1} A) \odot \pi_t
-$$
-
-where $\odot$ denotes elementwise multiplication.
-
-After normalization:
-
-$$
-\alpha_t = \frac{(\alpha_{t-1} A) \odot \pi_t}
-{\sum_k \left[(\alpha_{t-1} A) \odot \pi_t \right]_k}
-$$
-
-This smooths regime probabilities over time.
-
-Implemented in:
-
-```
-similarity_forecast/regimes.py
-```
-
-### Stage 4 — Similarity Retrieval
-
-For anchor embedding $z_t$, retrieve nearest neighbors:
-
-$$
-\mathcal{N}(t) = { t_i }
-$$
-
-using Euclidean distance in embedding space:
-
-$$
-d_i = | z_t - z_{t_i} |_2
-$$
-
-Similarity kernel:
-
-$$
-\kappa_i = \exp\left(-\frac{d_i}{\tau}\right)
-$$
-
-Implemented in:
-
-```
-similarity_forecast/core.py
-similarity_forecast/pipeline_regime.py
-```
-
-### Stage 5 — Regime-Aware KNN Aggregation
-
-For each regime $k$, compute regime-conditioned weights:
-
-$$
-w_i^{(k)} \propto \kappa_i , \pi_{t_i}(k)
-$$
-
-Normalized over neighbors:
-
-$$
-w_i^{(k)} =
-\frac{\kappa_i , \pi_{t_i}(k)}
-{\sum_j \kappa_j , \pi_{t_j}(k)}
-$$
-
-Regime-conditional forecasts:
-
-$$
-\hat{y}^{(k)} =
-\sum_{i \in \mathcal{N}(t)}
-w_i^{(k)} , y_{t_i}
-$$
-
-Final mixture forecast:
-
-$$
-\hat{y}*t =
-\sum*{k=1}^{K}
-\alpha_t(k) , \hat{y}^{(k)}
-$$
-
-Aggregation supports:
-
-- Euclidean mean
-- Log-Euclidean SPD mean (for covariance matrices)
-
-Implemented in:
-
-```
-similarity_forecast/regime_weighting.py
-similarity_forecast/core.py
-similarity_forecast/pipeline_regime.py
-```
-
-### Outputs
-
-For each anchor time $t$, the model produces:
-
-- Regime-aware forecast object (covariance, correlation, or volatility)
-- Filtered regime posterior $\alpha_t$
-- Optional diagnostics:
-  - Neighbor indices
-  - Similarity weights $\kappa_i$
-  - Regime-conditioned forecasts $\hat{y}^{(k)}$
-  - Neighbor regime probabilities $\pi_{t_i}(k)$
-
-### Architecture Overview
-
-```
-similarity_forecast/
-│
-├── core.py
-├── embeddings.py
-├── target_objects.py
-├── regimes.py
-├── regime_weighting.py
-├── pipeline_regime.py
-└── __init__.py
-```
-
-Stage 6 (transition-ahead regime forecasting) can be added on top of this foundation.
-
-## Handling Missing Data
-
-The pipeline handles NAs (missing returns) at several stages:
-
-### 1. Data filtering (optional)
-
-- Optionally filter out stocks with >30% missing data before fitting.
-- Toggle in `run_regime_covariance.py` via `FILTER_HIGH_NA_STOCKS`, or use `SimilarityConfig.filter_high_na_stocks` and `high_na_threshold`.
-
-### 2. Window validation
-
-- Windows with >30% NAs are skipped (configurable: `max_window_na_pct`).
-- At least 80% of stocks must have some data in the window (`min_stocks_with_data_pct`).
-- Reduces unstable covariance and embedding estimates.
-
-### 3. Covariance computation
-
-- Uses pairwise-complete observations (pandas-style).
-- Requires a minimum overlap between pairs (default 50% of window length).
-- Result is projected onto the SPD manifold.
-
-### 4. Embeddings
-
-- Correlation eigenvalue embedder uses NA-safe covariance; falls back to complete-case or zero embedding when needed.
-- Vol embedder uses `nanstd` / `nanmean` over the window.
-
-### Configuration
-
-```python
-from similarity_forecast.config import SimilarityConfig
-
-config = SimilarityConfig(
-    max_window_na_pct=0.3,           # Skip windows with >30% NAs
-    min_stocks_with_data_pct=0.8,   # Need 80% of stocks with data
-    filter_high_na_stocks=True,      # Remove high-NA stocks upfront (if used)
-    high_na_threshold=0.3,
-)
-```
-
-Pipeline parameters (e.g. on `RegimeAwareSimilarityForecaster`): `max_window_na_pct`, `min_stocks_with_data_pct`, `verbose_skip`.
-
-### Why not impute?
-
-For returns we avoid imputation (forward-fill, mean, zero) because:
-
-- Forward-fill can introduce look-ahead bias.
-- Mean/zero imputation distorts volatilities and correlations.
-
-We use pairwise-complete observations and window validation instead, which is standard for real financial data.
-
-## Key Results (EDA Phase)
-
-- Extracted 515 stocks from minutely data.
-- Selected 100 high-quality stocks (~98.5% availability).
-- Includes 18 mega-caps: AAPL, MSFT, GOOGL, AMZN, NVDA, META/FB, NFLX, JPM, BAC, WFC, JNJ, PFE, UNH, WMT, HD, V, MA, NKE.
-
-## Evaluation
-
-We evaluate covariance forecasts in a walk-forward backtest (no look-ahead bias).
-At each anchor date `t`, the model predicts a covariance matrix `Sigma_hat_t` using only the past `L` days, and is scored against the realized covariance `Sigma_t` computed from the next `H` days.
-
-### Metrics
-
-We report a mix of matrix accuracy, probabilistic scoring, correlation skill, and portfolio usefulness.
+- **Returns:** `data/processed/returns_universe_100.parquet` (100-stock universe; see `data/universes/`).
+- **Coverage:** ~98.5% mean availability (see `data/universes/` metadata).
 
 ---
 
-### Matrix Errors
+## Repository layout
 
-- **`fro`** — Frobenius norm
-  || Sigma_hat_t − Sigma_t ||\_F
+```
+26W_M279/
+├── configs/              # regime_covariance.yaml, viz_*, ablation_*
+├── similarity_forecast/  # Core forecasting pipeline
+├── run_backtest.py       # Main evaluation entry point
+├── scripts/analysis/     # Visualization, ablation, diagnostics
+├── results/              # Outputs (often gitignored partially)
+├── docs/                 # Design notes, figure catalog, organization rules
+└── data/                 # Raw/processed (large files gitignored)
+```
 
-- **`kl`** — Gaussian KL divergence
-  KL( N(0, Sigma_t) || N(0, Sigma_hat_t) )
-
-- **`stein`** — Stein loss
-  tr(Sigma_hat^{-1} Sigma) − log det(Sigma_hat^{-1} Sigma) − N
+**Organization rules:** [docs/FILE_ORGANIZATION_RULES.md](docs/FILE_ORGANIZATION_RULES.md)  
+**Figure catalog:** [docs/FIGURES_CATALOG.md](docs/FIGURES_CATALOG.md)  
+**Extended results narrative:** [docs/RESULTS_FINAL_REPORT.md](docs/RESULTS_FINAL_REPORT.md)
 
 ---
 
-### Predictive Likelihood
+## Other utilities
 
-- **`nll`** — Gaussian negative log-likelihood of realized future returns
-  Average over horizon days of:
-  0.5 \* ( log det(Sigma_hat_t) + r' Sigma_hat_t^{-1} r )
-
-This evaluates how well the forecast explains actual realized returns.
-
----
-
-### SPD / Spectral Structure
-
-- **`logeuc`** — Log-Euclidean distance
-  || log(Sigma_hat_t) − log(Sigma_t) ||\_F
-
-- **`eig_log_mse`** — Mean squared error between log eigenvalues
-
-- **`cond_ratio`** — Condition number ratio
-  cond(Sigma_hat_t) / cond(Sigma_t)
-
-These capture structural and conditioning differences between covariance matrices.
+| Script | Purpose |
+|--------|---------|
+| `python run_regime_covariance.py` | Small demo / single-anchor test (not the full backtest) |
+| `python -m scripts.analysis.case_study_neighbors --config configs/regime_covariance.yaml --date YYYY-MM-DD` | Neighbor diagnostics for a given anchor |
+| `python -m scripts.analysis.ablation.run_regime_clustering_ablation` | Clustering backend comparison |
 
 ---
-
-### Correlation Structure
-
-- **`corr_offdiag_fro`** — Frobenius error on off-diagonal entries of correlation matrices
-
-- **`corr_spearman`** — Spearman rank correlation between upper-triangle correlation entries
-
-These isolate correlation forecasting skill separately from volatility scale.
-
----
-
-### Portfolio-Based Evaluation
-
-- **`pred_var` / `real_var`**
-  Predicted vs realized variance of the ridge-regularized Global Minimum Variance Portfolio (GMVP).
-
-- **`port_mse_logvar`**
-  Mean squared error of log variance across a fixed set of evaluation portfolios
-  (equal-weight + random long-only portfolios).
-
-- **Stability diagnostics**
-  - `turnover_l1` — L1 turnover of GMVP weights
-  - `w_hhi` — Herfindahl concentration index
-  - `w_max_abs` — Maximum absolute weight
-
----
-
-## Running Evaluation & Analysis
-
-### Ablation: kNN distance vs regime clustering (quick reference)
-
-Two dedicated ablations isolate **which part of the pipeline** you are changing:
-
-| Ablation | Pipeline stage | Config keys | What the params mean |
-| -------- | -------------- | ----------- | --------------------- |
-| **kNN / embedding distance** | Stage 4 — nearest neighbors in embedding space | `model.knn_metric` (and `model.knn_lp_p` when metric is `lp`) | Chooses how distance \(d(z_t, z_i)\) is computed before the kernel \(\kappa_i = \exp(-d_i/\tau)\). Choices include `l2`, `l1`, `cosine`, `angular`, `chebyshev`, and labeled Lp runs `lp_p1`…`lp_p4` (`knn_metric: lp` + integer `knn_lp_p`). **`model.tau`** is not swept by default; distance scales differ by metric. |
-| **Regime clustering** | Stage 2 — soft regime memberships \(\pi_t(k)\) on training embeddings | `model.regime_clustering.name` and `model.regime_clustering.params` | Selects the backend (`gmm`, `kmeans_soft`, `spectral_rbf`, `spectral_knn`, `agglomerative_ward`, `fuzzy_cmeans`, `modified_two_stage`, `signed_knn_spectral`). **`params`** holds method-specific hyperparameters (e.g. `fuzziness` for fuzzy c-means, `n_neighbors` for spectral KNN). **`model.n_regimes`** and **`model.random_state`** always come from the top-level `model:` block, not from `regime_clustering`. |
-| **PCA dimension** | Stage 1 — width of the PCA window embedding | `embedder.pca_k` (with `embedder.name: pca`) | Number of components \(D\) in `PCAWindowEmbedder`. Sweep with [§4e](#4e-pca-embedding-dimension-pca_k); pick \(D\) by validation metrics (Fro, Sharpe, turnover) jointly. |
-| **τ × k Pareto** | Stages 4–5 — kernel scale + neighbor count | `model.tau`, `backtest.k_neighbors` | Full **grid** (`mode: grid`), then **Pareto** on mean model Sharpe / GMVP var / turnover ([§4f](#4f-joint-grid-tau--k_neighbors--pareto-gmvp-report)). No scalar \(J\); choose on the frontier. |
-
-**Shared ablation YAML mechanics** (both sweeps): `base_config` loads a full run config; `overrides` is merged for every run (shorter dates, stride, refit cadence); `mode: one_at_a_time` runs one choice per axis while holding the rest at base values.
-
-**Where to run and full parameter tables**
-
-- **Distance only:** [§4c — kNN embedding distance ablation](#4c-knn-embedding-distance-ablation) — configs [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml), [`configs/ablation_volatility.yaml`](configs/ablation_volatility.yaml); optional model-only figure via `plot_knn_metric_ablation`.
-- **Clustering only:** [§4d — Regime clustering method ablation](#4d-regime-clustering-method-ablation) — `python -m scripts.analysis.ablation.run_regime_clustering_ablation` or [`configs/ablation_regime_clustering.yaml`](configs/ablation_regime_clustering.yaml); table of per-method `params` used in the default sweep.
-- **PCA \(D\):** [§4e — `pca_k` ablation](#4e-pca-embedding-dimension-pca_k) — `python -m scripts.analysis.ablation.run_pca_k_ablation` or [`configs/ablation_pca_k.yaml`](configs/ablation_pca_k.yaml).
-- **Joint τ × k + Pareto GMVP:** [§4f](#4f-joint-grid-tau--k_neighbors--pareto-gmvp-report) — `run_joint_gmvp_grid` / [`configs/ablation_joint_gmvp_grid.yaml`](configs/ablation_joint_gmvp_grid.yaml).
-- **Phased workflow (marginals → shortlist joint grid → Pareto):** [§4g](#4g-phased-covariance-ablation-k-regimes-separate) — [`run_phased_covariance_ablation`](scripts/analysis/ablation/run_phased_covariance_ablation.py).
-- **Full design grid** (embedder, transition, distance, regime aggregation/weighting): [§4b](#4b-pipeline-design-ablation-one-axis-at-a-time) — largely superseded for cov by Phase 1 YAML (see §4g).
-
-### 1. Main Backtest (Walk-Forward Evaluation)
-
-Run the complete evaluation pipeline with all baselines:
-
-```bash
-python run_backtest.py --config configs/regime_covariance.yaml
-```
-
-**Outputs (covariance):**
-
-- `results/regime_covariance/backtest.{parquet,csv}` - Full results (all methods, all dates)
-- `results/regime_covariance/report.csv` - Summary statistics by method
-- `results/regime_covariance/config_used.yaml` - Config snapshot
-
-**Duration:** ~5-10 minutes
-
-**Target type:** The pipeline is target-agnostic. In config, `model.target` can be `"covariance"` (default) or `"volatility"`. **Volatility = realized volatility:** the target is computed from the future-window sample covariance as sqrt(diag(Σ)) (optionally log), i.e. realized vol per asset over the horizon. For the vol task, the same walk-forward loop runs with EuclideanMean aggregation and scalar metrics (vol_mse, vol_mae, vol_rmse); no GMVP.
-
-**Volatility backtest (same pipeline):**
-
-```bash
-python run_backtest.py --config configs/regime_volatility.yaml
-```
-
-Outputs: `results/regime_volatility/backtest.{parquet,csv}`, `results/regime_volatility/report.csv`. Then visualize with:
-
-```bash
-python -m scripts.analysis.core.visualize_backtest_results --config configs/viz_regime_volatility.yaml
-```
-
-Figures go to `results/regime_volatility/figs/raw_temporal/` (error and cumulative-advantage use `vol_mse`).
-
-**Embedder choice:** For **covariance** forecasting, `pca` or `corr_eig` are appropriate (they capture return/factor or correlation structure). For **realized vol** forecasting, `embedder.name: "vol_stats"` is recommended: it embeds the past window’s vol distribution (mean + quantiles of log vol), so kNN similarity aligns with “similar past vol regime.” The volatility config uses `vol_stats` by default; you can set `embedder.name: "pca"` or `"corr_eig"` to reuse the same embedding as the covariance run. If **vol MSE is poor** (model worse than baselines): increase **`mixing.vol_dampen_toward_roll`** (e.g. 0.2–0.3), lower **`mixing.mix_lambda`**, and run the statistical comparison for vol (§5).
-
-**Key design (volatility):** The vol pipeline is tuned so the model can beat Shrink, Roll, and Pers on Vol MSE / MAE / RMSE (log-vol). Main choices: **(1)** **Dampening** — the raw kNN forecast is blended with baselines: `vol_hat_use = (1 − α − β)·vol_hat + α·vol_roll + β·vol_shrink` with `vol_dampen_toward_roll` (e.g. 0.5) and `vol_dampen_toward_shrink` (e.g. 0.15). This cuts kNN variance while keeping regime signal. **(2)** **More neighbors** — `backtest.k_neighbors` (e.g. 15) gives a smoother kNN average and lower forecast variance than small k. **(3)** **VolStatsEmbedder** — past-window vol distribution (mean, quantiles, trend, concentration) so similarity ≈ similar past vol regime. With these, the model consistently shows statistically significant advantage over Shrink, Roll, and Pers on Vol MSE/MAE/RMSE in the statistical comparison plots.
-
----
-
-### 2. Standard Evaluation Plots
-
-Generate time-series plots of all metrics:
-
-```bash
-python -m scripts.analysis.core.visualize_backtest_results \
-  --config configs/viz_regime_covariance.yaml
-```
-
-**Outputs (covariance):**
-
-- `results/regime_covariance/figs/raw_temporal/equity_curves_gmvp.png`
-- `results/regime_covariance/figs/raw_temporal/method_overlays.png`
-- `results/regime_covariance/figs/raw_temporal/rolling_median_21d.png`
-- other time-series / cumulative-advantage plots under `results/regime_covariance/figs/raw_temporal/`
-
----
-
-### 3. Regime Analysis & Visualization
-
-#### Generate All Regime Figures
-
-All regime scripts support **covariance** (default) and **volatility** via `--target` and `--input`:
-
-```bash
-# Regime timeline, probability evolution, filtering effect (default: covariance)
-python -m scripts.analysis.regime.visualize_regimes
-python -m scripts.analysis.regime.visualize_regimes --target volatility
-
-# Regime characterization table
-python -m scripts.analysis.regime.regime_characterization --input results/regime_covariance/backtest.parquet
-python -m scripts.analysis.regime.regime_characterization --input results/regime_volatility/backtest.parquet --target volatility
-
-# Transition matrix heatmap
-python -m scripts.analysis.regime.visualize_transition_matrix --target volatility
-
-# Performance by regime
-python -m scripts.analysis.regime.performance_by_regime --input results/regime_volatility/backtest.parquet --target volatility
-```
-
-**Outputs (covariance):** `results/regime_covariance/figs/regime/`, `results/regime_covariance/regime_characterization.csv`, `results/regime_covariance/transition_matrix.csv`  
-**Outputs (volatility):** `results/regime_volatility/figs/regime/`, `results/regime_volatility/regime_characterization_volatility.csv`, `results/regime_volatility/transition_matrix_volatility.csv`
-
----
-
-### 4. K Ablation Study
-
-Test model with different numbers of regimes (K=1,2,3,4,5,6). Works for **covariance** and **volatility**:
-
-```bash
-# Covariance (default): run ablation, then analyze
-python -m scripts.analysis.ablation.run_k_ablation --config configs/regime_covariance.yaml
-python -m scripts.analysis.ablation.analyze_k_ablation
-
-# Volatility: use vol config and target
-python -m scripts.analysis.ablation.run_k_ablation --config configs/regime_volatility.yaml
-python -m scripts.analysis.ablation.analyze_k_ablation --ablation-dir results/ablation_k_regime_volatility --target volatility
-```
-
-**Outputs (cov):** `results/ablation_k/` (reports and optional backtest_k*.parquet), `results/regime_covariance/figs/ablation_k_regimes.png` (4-panel)  
-**Outputs (vol):** `results/ablation_k_regime_volatility/`, same comparison CSV and 2-panel figure under `results/regime_volatility/figs/ablation_k_regimes.png`
-
----
-
-### 4b. Pipeline design ablation (one axis at a time)
-
-Isolate the effect of high-level design choices (embedder, distance, transition, regime aggregation/weighting) without sweeping hyperparameters:
-
-```bash
-# Covariance: embedder (pca, corr_eig), transition_estimator (hard, soft), knn_metric (l2/l1/cosine/angular/chebyshev/Lp), regime_aggregation (soft, hard), regime_weighting (filtered, raw_pi)
-python -m scripts.analysis.ablation.run_ablation --config configs/ablation_covariance.yaml
-
-# Volatility: same axes; embedder choices include vol_stats
-python -m scripts.analysis.ablation.run_ablation --config configs/ablation_volatility.yaml
-```
-
-**Outputs:**
-
-- `results/regime_covariance/ablation/ablation_summary.csv` (cov) or `results/regime_volatility/ablation/ablation_summary.csv` (vol) — one row per axis/choice with primary metric mean (e.g. `model_fro`, `mix_fro` for cov; `model_vol_mse` for vol) and optional extra metrics.
-- Full per-choice time-series backtests under `results/<tag>/ablation/runs/<axis>/<choice>.parquet` (or `.csv`).
-- Ablation figures under `<outputs.outdir>/figs/` (e.g. `results/regime_covariance/ablation/figs/` when using default outdir), including `axis_*_model_only.png` for each one-at-a-time axis:
-  - `ablation_summary.png` (bar chart)
-  - `<axis>/..._timeseries_overlay.png`, `cumadv_*_overlay.png` (choices overlaid for easy comparison)
-
-**Axes:**
-
-| Axis                   | Choices                          | Description                                  |
-| ---------------------- | -------------------------------- | -------------------------------------------- |
-| `embedder`             | pca, corr_eig (vol: + vol_stats) | Window embedding for similarity              |
-| `transition_estimator` | hard, soft                       | How transition matrix A is estimated         |
-| `knn_metric`           | l2, l1, cosine, angular, chebyshev, Lp (p=1–4) | Neighbor distance in embedding space ([§4c](#4c-knn-embedding-distance-ablation)) |
-| `regime_aggregation`   | soft, hard                       | Weights over regimes: α vs one-hot argmax(α) |
-| `regime_weighting`     | filtered, raw_pi                 | Use filtered α vs raw GMM π                  |
-
----
-
-### 4c. kNN embedding distance ablation
-
-This ablation varies **Stage 4 — neighbor retrieval** only: how distances are computed between the anchor embedding \(z_t\) and candidate past embeddings in the training pool. It does **not** change Stage 2 regime clustering unless you edit the base config; default regime assignment stays **GMM** (or whatever `model.regime_clustering` you set in the base YAML).
-
-#### Config keys and YAML shape
-
-| YAML field | Meaning |
-| ---------- | ------- |
-| `base_config` | Starting point (e.g. `regime_covariance.yaml`); all other model/backtest keys come from here unless overridden. |
-| `mode: one_at_a_time` | For each **axis**, run every **choice** once; non-swept keys stay at base (+ `overrides`). |
-| `overrides` | Merged on top of `base_config` for **every** ablation run (shorter date range, coarser stride, refit cadence, etc.). Does not modify the file on disk. |
-| `axes.knn_metric.key` | Dotted path into the merged config: `model.knn_metric` (and optionally `model.knn_lp_p` for Lp). |
-| `axes.knn_metric.choices` | Each entry is either a **string** (sets only `model.knn_metric`) or a **dict** with optional `label`, nested keys like `model.knn_metric` / `model.knn_lp_p` (see [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml)). |
-
-**Typical `overrides` for speed** (covariance design ablation): `data.start_date` / `data.end_date`, `backtest.stride`, `backtest.refit_mode`, `backtest.refit_every_days`. Same idea in [`configs/ablation_volatility.yaml`](configs/ablation_volatility.yaml) for the vol pipeline.
-
-**Runtime config fields touched by this axis:**
-
-| Config key | Role |
-| ---------- | ---- |
-| `model.knn_metric` | Metric name: `l2`, `l1`, `lp`, `cosine`, `angular`, `chebyshev` (aliases like `euclidean` / `manhattan` are accepted in code). |
-| `model.knn_lp_p` | Used only when `knn_metric: lp`: Minkowski exponent \(p > 0\), or `inf` for Chebyshev. |
-
-**Kernel:** neighbor weights use \(\kappa_i = \exp(-d_i / \tau)\) with **`model.tau`**. Distance scale depends on the metric, so **`tau` is not swept** in the default ablation configs; for a fair comparison across metrics you may want a dedicated **`tau`** axis or manual retuning.
-
-#### Choices in `ablation_covariance.yaml` / `ablation_volatility.yaml` (meaning)
-
-Implemented in `similarity_forecast/core.py` (`make_embedding_distance` / `ExactKNN`):
-
-| Choice label | Config | Distance (higher = farther) |
-| ------------ | ------ | --------------------------- |
-| `l2` | `knn_metric: l2` | Euclidean \(\|z - q\|_2\). |
-| `l1` | `knn_metric: l1` | Manhattan / L1 \(\sum_d \|z_d - q_d\|\). |
-| `cosine` | `knn_metric: cosine` | Cosine distance \(1 - \cos\theta\), in \([0, 2]\); scale-invariant in direction. |
-| `angular` | `knn_metric: angular` | Geodesic angle \(\arccos(\cos\theta)\) on the unit sphere, in \([0, \pi]\). |
-| `chebyshev` | `knn_metric: chebyshev` | L\(\infty\) / max coordinate \( \max_d \|z_d - q_d\| \). |
-| `lp_p1` … `lp_p4` | `knn_metric: lp`, `knn_lp_p: 1..4` | Minkowski \(\big(\sum_d \|z_d - q_d\|^p\big)^{1/p}\). Note `lp_p1` / `lp_p2` duplicate `l1` / `l2` numerically but keep explicit Lp-labeled runs in the summary. |
-
-**Configs:**
-
-- Covariance: [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml).
-- Volatility: [`configs/ablation_volatility.yaml`](configs/ablation_volatility.yaml) — same `knn_metric` axis plus vol-specific axes (e.g. embedder).
-
-**Run:**
-
-```bash
-python -m scripts.analysis.ablation.run_ablation --config configs/ablation_covariance.yaml
-python -m scripts.analysis.ablation.run_ablation --config configs/ablation_volatility.yaml
-```
-
-**Outputs:** rows with `axis == knn_metric` in `<outputs.outdir>/ablation_summary.csv` (e.g. `results/regime_covariance/ablation/...`), per-choice backtests under `<outputs.outdir>/runs/knn_metric/<choice>/`, and overlay figures under `<outputs.outdir>/figs/knn_metric/` (plus `axis_knn_metric_model_only.png` when plots are enabled).
-
-**Model-only figure (4-panel bars from the summary CSV):**
-
-```bash
-python -m scripts.analysis.ablation.plot_knn_metric_ablation
-# or: --summary path/to/ablation_summary.csv
-```
-
-Default summary path is `results/regime_covariance/ablation/ablation_summary.csv`.
-
----
-
-### 4d. Regime clustering method ablation
-
-This ablation varies **Stage 2 — regime assignment**: how training-window embeddings \(Z\) are mapped to soft memberships \(\pi_t(k)\) (and how OOS rows get `predict_proba`). **Stages 1, 3–5** follow the base config plus the same global **`overrides`** as in the spec (unless you edit them).
-
-#### Config keys and YAML shape
-
-| YAML field | Meaning |
-| ---------- | ------- |
-| `base_config` | e.g. `regime_covariance.yaml` — supplies `model.n_regimes`, `model.random_state`, KNN, embedder, etc. |
-| `overrides` | Applied to every run (in the dedicated script: 2015–2021, `stride: 5`, `refit_every_days: 20`, `refit_mode: days`). |
-| `axes.regime_clustering.key` | `model.regime_clustering` — each choice is a dict `{ name, params }` merged into the model block. |
-
-**Per-run `model.regime_clustering` structure:**
-
-| Sub-key | Meaning |
-| ------- | ------- |
-| `name` | Backend id: `gmm`, `kmeans_soft`, `spectral_rbf`, `spectral_knn`, `agglomerative_ward`, `fuzzy_cmeans`, `modified_two_stage`, `signed_knn_spectral`. |
-| `params` | Method-specific hyperparameters passed to `make_regime_clusterer` in `similarity_forecast/regime_clustering.py`. Omitted keys use code defaults. |
-
-**Important:** `model.n_regimes` and `model.random_state` always come from the **base** `model:` block, not from `regime_clustering`. For **GMM** runs in this ablation, `params` is usually `{}`; that uses **clusterer defaults** (`gmm_init_params: kmeans`, `gmm_n_init: 1`, etc.), **not** the legacy top-level `model.gmm_init_params` / `model.gmm_n_init` (those apply only when `regime_clustering` is absent and the default GMM path is built in `run_backtest.build_model`).
-
-#### Parameters used in the default clustering comparison sweep
-
-The script [`scripts/analysis/ablation/run_regime_clustering_ablation.py`](scripts/analysis/ablation/run_regime_clustering_ablation.py) generates one choice per `implemented_regime_clustering_names()`. Extra `params` are only set for the two graph methods; everything else is `{}` (code defaults below).
-
-| `name` | `params` in ablation | Default hyperparameters when `params` is `{}` (meaning) |
-| ------ | -------------------- | -------------------------------------------------------- |
-| `gmm` | `{}` | `covariance_type=diag`, `reg_covar=1e-3`, `max_iter=300`, `tol=1e-3`, `gmm_init_params=kmeans`, `gmm_n_init=1`, `eps=1e-12`. |
-| `kmeans_soft` | `{}` | `n_init=10`, `max_iter=300`, `temperature=1.0` (softmax sharpness to prototypes), `eps=1e-12`. |
-| `spectral_rbf` | `{}` | RBF affinity; `gamma=None` (sklearn default), `temperature=1.0`, `eps=1e-12`. |
-| `spectral_knn` | `n_neighbors: 10` | KNN affinity with `n_neighbors=10`, plus `temperature=1.0`, `eps=1e-12`. |
-| `agglomerative_ward` | `{}` | `linkage=ward`, `temperature=1.0`, `eps=1e-12`. |
-| `fuzzy_cmeans` | `{}` | `fuzziness=2.0` (m), `max_iter=300`, `error=1e-5` (skfuzzy tolerance), `eps=1e-12`. Requires **`pip install scikit-fuzzy`**. |
-| `modified_two_stage` | `{}` | `outlier_quantile=0.9`, `n_init=10`, `temperature=1.0`, `eps=1e-12`. |
-| `signed_knn_spectral` | `n_neighbors: 15` | Signed graph from embedding cosine similarity; `n_neighbors=15`, `temperature=1.0`, `eps=1e-12`. |
-
-For **production or tuned comparisons**, set `model.regime_clustering` in [`configs/regime_covariance.yaml`](configs/regime_covariance.yaml) (see commented examples there).
-
-**Run (recommended — spec stays in sync with code):**
-
-```bash
-python -m scripts.analysis.ablation.run_regime_clustering_ablation
-python -m scripts.analysis.ablation.run_regime_clustering_ablation --verbose
-python -m scripts.analysis.ablation.run_regime_clustering_ablation --plot-only   # figure from existing summary only
-```
-
-**Alternative:** static spec in [`configs/ablation_regime_clustering.yaml`](configs/ablation_regime_clustering.yaml):
-
-```bash
-python -m scripts.analysis.ablation.run_ablation --config configs/ablation_regime_clustering.yaml
-```
-
-**Dependencies:** `fuzzy_cmeans` requires **scikit-fuzzy**. Other methods use scikit-learn / SciPy only.
-
-**Outputs:**
-
-- `results/regime_covariance/ablation_regime_clustering/ablation_spec.yaml` (when using the dedicated script)
-- `results/regime_covariance/ablation_regime_clustering/ablation_summary.csv`
-- `results/regime_covariance/ablation_regime_clustering/figs/regime_clustering_model_only.png` (model metrics bar chart)
-
----
-
-### 4e. PCA embedding dimension (`pca_k`)
-
-Sweep **Stage 1** width \(D =\) `embedder.pca_k` while fixing `embedder.name: pca` and the rest of the stack (from [`configs/regime_covariance.yaml`](configs/regime_covariance.yaml) plus the same **short-window overrides** as other ablations: 2015–2021, stride 5, refit every 20 days).
-
-| YAML / axis | Meaning |
-| ----------- | ------- |
-| `axes.pca_k.key` | `embedder.pca_k` — number of PCA components per window embedding. |
-| `overrides.embedder.name` | Locked to `pca` so the sweep does not switch to `corr_eig`. |
-
-**Run (recommended):**
-
-```bash
-python -m scripts.analysis.ablation.run_pca_k_ablation
-python -m scripts.analysis.ablation.run_pca_k_ablation --plots none --verbose   # faster: no ablation_summary.png / per-axis bars
-```
-
-**Alternative:** `python -m scripts.analysis.ablation.run_ablation --config configs/ablation_pca_k.yaml` (writes under `outputs.outdir` in the YAML; base config path is relative to the YAML file’s directory — use the runner above if the spec is copied under `results/`).
-
-**Interpretation:** `ablation_summary.csv` reports `model_mean` / `mix_mean` (mean Frobenius error) plus GMVP and turnover columns. The runner prints the **lowest `model_mean` Fro** choice; for a multi-objective pick (e.g. Fro vs turnover), use the CSV and [`plot_pca_k_ablation`](scripts/analysis/ablation/plot_pca_k_ablation.py) together.
-
-**Outputs:**
-
-- `results/regime_covariance/ablation_pca_k/ablation_summary.csv`
-- `results/regime_covariance/ablation_pca_k/figs/pca_k_ablation_model_only.png` (model-only four-panel bars)
-- `results/regime_covariance/ablation_pca_k/runs/pca_k/<k>/` — per-`k` backtest series
-
----
-
-### 4f. Joint grid (`tau` × `k_neighbors`) + **Pareto** GMVP report
-
-For **portfolio** tradeoffs (no single scalar \(J\)), run a small **full grid** and then a **Pareto** analysis on **model** time-series means:
-
-| Objective | Direction |
-| --------- | --------- |
-| `model_gmvp_sharpe_mean` | higher better |
-| `model_gmvp_var_mean` | lower better |
-| `model_turnover_l1_mean` | lower better |
-
-A grid point is **Pareto-efficient** if no other point is ≥ on Sharpe, ≤ on variance, and ≤ on turnover, with **strict** improvement in at least one. You **choose** a point on that frontier (or add another axis later), instead of baking weights into one \(J\).
-
-**Default axes** ([`configs/ablation_joint_gmvp_grid.yaml`](configs/ablation_joint_gmvp_grid.yaml)):
-
-- `model.tau` — kNN kernel scale \(\kappa = \exp(-d/\tau)\)
-- `backtest.k_neighbors` — neighbor count \(k\)
-
-Default Cartesian product: **5 × 3 = 15** walk-forward runs (with the same short-window `overrides` as other ablations). Edit the YAML to add more axes (e.g. `embedder.pca_k`); cost multiplies.
-
-#### Should clustering, distance, or embedder go in the **same** grid?
-
-**You can, but usually not all at once.** A full grid multiplies run count:
-
-\[
-\text{\#runs} = \prod_{\text{axes}} |\text{choices}|
-\]
-
-Example: 8 clusterings × 9 `knn_metric` variants × 2 embedders × 5 τ × 3 \(k\) = **2 160** walk-forward jobs. That is why the repo keeps **one-at-a-time** ablations for those axes and a **small** joint grid for τ × \(k\) first.
-
-**Practical workflow**
-
-1. **Phase 1 (already have):** marginal ablations — `regime_clustering`, `knn_metric`, `embedder.name` / `pca_k`, etc. — to eliminate weak options.
-2. **Phase 2:** fix **discrete** choices to a **shortlist** (e.g. 2 clusterers × 3 metrics × 2 embedders) and combine **only with** τ × \(k\) in `mode: grid`. Keep the product under a budget (tens to low hundreds of runs).
-3. **Phase 3:** optional **coordinate descent** — freeze everything at the Phase-2 winner, re-sweep one axis, repeat — cheaper than a megagrid and handles **interactions** better than three independent “bests.”
-
-**YAML mechanics** (same as [`run_ablation.py`](scripts/analysis/ablation/run_ablation.py)):
-
-| Axis | `key` or dict `choices` |
-| ---- | ------------------------ |
-| Embedder family | `key: embedder.name`, `choices: [pca, corr_eig]` |
-| PCA width | `key: embedder.pca_k`, `choices: [16, 24, 32]` (use with `embedder.name: pca` in `overrides` or per-choice dict) |
-| kNN metric | dict choices with dotted keys, e.g. `label: l2` + `model.knn_metric: l2`, or `label: lp_p3` + `model.knn_metric: lp` + `model.knn_lp_p: 3` (see [`configs/ablation_covariance.yaml`](configs/ablation_covariance.yaml)) |
-| Regime clustering | dict per choice: `label: gmm` and `model.regime_clustering: {name: gmm, params: {}}` (nested mapping under `model.regime_clustering`) |
-
-**Pareto step:** [`pareto_gmvp_report`](scripts/analysis/ablation/pareto_gmvp_report.py) still uses **three model objectives** (Sharpe, GMVP var, turnover means). Adding axes only grows the **cloud** of points; the frontier can get **more** nondominated points (richer tradeoffs), not a single automatic winner.
-
-**Run:**
-
-```bash
-python -m scripts.analysis.ablation.run_joint_gmvp_grid
-python -m scripts.analysis.ablation.run_joint_gmvp_grid --plots none --verbose
-# Recompute figures from an existing summary only:
-python -m scripts.analysis.ablation.run_joint_gmvp_grid --pareto-only
-```
-
-**Pareto only** (if you already have `ablation_summary.csv` from `mode: grid`):
-
-```bash
-python -m scripts.analysis.ablation.pareto_gmvp_report \\
-  --summary results/regime_covariance/ablation_joint_gmvp/ablation_summary.csv \\
-  --outdir results/regime_covariance/ablation_joint_gmvp/pareto
-```
-
-**Outputs:**
-
-- `ablation_summary.csv` — one row per \((\tau, k)\) with `mode=grid` and metric means
-- `runs/__grid__/*.parquet` — full backtest per combination
-- `pareto/grid_with_pareto_flags.csv` — all grid rows + `is_pareto`
-- `pareto/pareto_frontier.csv` — nondominated subset
-- `pareto/pareto_2d_sharpe_vs_turnover.png`, `pareto_2d_sharpe_vs_var.png`, `pareto_3d_sharpe_var_turnover.png`, optional Fro diagnostic bar chart
-
----
-
-### 4g. Phased covariance ablation (K-regimes separate)
-
-End-to-end workflow that **merges** the old split configs (except **`n_regimes` / K**, which stays in [`run_k_ablation`](scripts/analysis/ablation/run_k_ablation.py)):
-
-| Phase | Config | What it does |
-| ----- | ------ | ------------- |
-| **0** (optional) | [`ablation_joint_gmvp_grid.yaml`](configs/ablation_joint_gmvp_grid.yaml) | Joint **τ × k** on the base stack + **Pareto** GMVP report (probe similarity layer only). |
-| **1** | [`ablation_phase1_covariance.yaml`](configs/ablation_phase1_covariance.yaml) | **One-at-a-time** marginals: `embedder.name`, `embedder.pca_k`, **regime clustering** (8 backends), **`knn_metric`**, **`k_neighbors`**, **`model.tau`**, `transition_estimator`, `regime_aggregation`, `regime_weighting`. Superset of [`ablation_covariance.yaml`](configs/ablation_covariance.yaml) + clustering + PCA-k + k-neighbors + τ. |
-| **2** | [`ablation_phase2_joint_shortlist.yaml`](configs/ablation_phase2_joint_shortlist.yaml) | **Grid** on a **shortlist** you edit after Phase 1 (default **48** runs: 2 clusterers × 3 metrics × 2 embedders × 2 τ × 2 k). Then **Pareto** on model Sharpe / GMVP var / turnover. |
-| **3** | — | **Coordinate descent** (manual): copy Phase-2 pick into `regime_covariance.yaml`, then re-sweep single axes or mini-grids. `--phase 3` prints the checklist. |
-
-**Orchestrator:**
-
-```bash
-python -m scripts.analysis.ablation.run_phased_covariance_ablation --dry-run
-python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 0   # τ×k + Pareto
-python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 1 --plots summary
-python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 2 --plots none
-python -m scripts.analysis.ablation.run_phased_covariance_ablation --phase 3   # instructions only
-```
-
-**Outputs:** `results/regime_covariance/ablation_phase1_covariance/`, `ablation_phase2_joint/` (each with `ablation_spec_resolved.yaml` + `ablation_summary.csv`; Phase 0/2 also `pareto/` when Pareto runs).
-
-**Still standalone (unchanged):** [`ablation_volatility.yaml`](configs/ablation_volatility.yaml), [`ablation_k_neighbors_covariance.yaml`](configs/ablation_k_neighbors_covariance.yaml) (narrower k sweep), [`run_regime_clustering_ablation`](scripts/analysis/ablation/run_regime_clustering_ablation.py) (auto-syncs clustering names from code), [`run_pca_k_ablation`](scripts/analysis/ablation/run_pca_k_ablation.py) (full `pca_k` list without other axes).
-
----
-
-### 5. Statistical Comparison
-
-Compare model/mix vs baselines with paired t-tests (same script for covariance and volatility):
-
-```bash
-# Covariance (default: regime_covariance backtest)
-python -m scripts.analysis.core.visualize_statistical_comparison
-
-# Volatility
-python -m scripts.analysis.core.visualize_statistical_comparison --input results/regime_volatility/backtest.parquet --target volatility
-```
-
-**Outputs:**
-
-- `results/regime_covariance/figs/statistical_comparison/model_vs_baselines.png`, `mix_vs_baselines.png` (cov) — boxplots of daily paired differences (Wilcoxon / median Δ̃ on figure)
-- Same paths under `regime_volatility/...` for vol backtests
-- `*_meanbars.png` — horizontal **mean** paired-advantage bars (+ = reference better) with paired **t**-stat and significance (`*`, `**`, `***`)
-- `forecast_correlation.png` and `forecast_correlation.csv` — correlation of model vs baselines on the primary metric (Fro for cov, vol MSE for vol)
-
-Choose figures with `--plots all` (default), or e.g. `--plots meanbars`, `--plots box meanbars`, `--plots correlation`.
-
-- Green = reference better than baseline; red = worse (boxplots use median difference; meanbars use mean difference)
-
----
-
-### 6. Neighbor-Based Case Studies
-
-To understand which historical episodes the model reuses for a given evaluation date, use the
-neighbor case-study tool:
-
-```bash
-# Example: COVID crash (covariance)
-python -m scripts.analysis.case_study_neighbors \
-  --config configs/regime_covariance.yaml \
-  --date 2020-03-09 \
-  --k_neighbors 10
-```
-
-This assumes the main backtest has already been run so that the corresponding backtest exists (e.g. `results/regime_covariance/backtest.parquet`). For **volatility**, use `--config configs/regime_volatility.yaml` (uses `results/regime_volatility/backtest.parquet`). Outputs are written under the config’s tag.
-
-**Per-date outputs (under `results/<tag>/case_studies/`, with `<tag>` = `regime_covariance` or `regime_volatility`):**
-
-- `neighbors_YYYYMMDD.csv`  
-  Neighbor diagnostics: `neighbor_date`, `lag_days`, `dist_embedding`, kernel weight `kappa`,
-  per-regime neighbor probabilities `pi_neighbor_regime_k`, regime-aware weights `W_regime_k`,
-  and `total_weight` (overall contribution under the filtered regime mix).
-- `neighbors_YYYYMMDD_weights_vs_date.png`  
-  Panel A — total neighbor weight vs `neighbor_date` (color = embedding distance).
-- `neighbors_YYYYMMDD_on_regime_timeline.png`  
-  Panel B — neighbors overlaid on a mini regime timeline, with point size ∝ weight and the
-  anchor date shown as a dashed vertical line.
-
-Typical anchors:
-
-- GFC stress: `2008-11-21`
-- COVID crash: `2020-03-09`
-
-### 7. Quick Demo (Single Prediction)
-
-Test pipeline on a single anchor point:
-
-```bash
-python run_regime_covariance.py
-```
-
-**Note:** This is for testing only - uses different data file and parameters
-than main evaluation.
-
----
-
-## Complete Analysis Pipeline (Run All)
-
-To regenerate all results and figures from scratch:
-
-```bash
-# One-command figures/tables (uses existing backtest outputs)
-python -m scripts.analysis.run_all --target covariance
-python -m scripts.analysis.run_all --target volatility
-
-# Main backtest (covariance then volatility)
-python run_backtest.py --config configs/regime_covariance.yaml
-python run_backtest.py --config configs/regime_volatility.yaml
-```
-
-`run_all` internally calls the per-module scripts (`visualize_backtest_results`, `visualize_statistical_comparison`, regime plots, K ablation, etc.) using the canonical `results/<tag>/...` layout, so you usually do not need to invoke them individually.
-
-**Total duration:** ~1-2 hours (most time is K ablation)
-
----
-
-## Key Result Files
-
-After running complete pipeline:
-
-**Metrics & Tables (covariance example):**
-
-- `results/regime_covariance/report.csv` - Summary by method
-- `results/regime_covariance/regime_characterization.csv` - Regime statistics
-- `results/ablation_k/ablation_k_comparison.csv` - K ablation results
-- `results/regime_covariance/comprehensive_baseline_comparison.csv` - Full baseline comparison
-- `results/regime_covariance/ablation/ablation_summary.csv` - Design ablation summary (includes kNN distance axis when using `ablation_covariance.yaml`)
-- `results/regime_covariance/ablation_regime_clustering/ablation_summary.csv` - Regime clustering method ablation
-- `results/regime_covariance/ablation_pca_k/ablation_summary.csv` - PCA embedding dimension (`pca_k`) ablation
-- `results/regime_covariance/ablation_joint_gmvp/ablation_summary.csv` - Joint grid (e.g. τ × k); see `pareto/` for frontier CSVs and figures
-- `results/regime_covariance/ablation_phase1_covariance/ablation_summary.csv` - Phased workflow Phase 1 (cov marginals)
-- `results/regime_covariance/ablation_phase2_joint/ablation_summary.csv` - Phased workflow Phase 2 (shortlist grid); `pareto/` for GMVP Pareto
-
-**Key Figures (covariance example, all under `results/regime_covariance/figs/`):**
-
-- `regime/regime_timeline.png` - Regime assignments with crisis periods
-- `regime/performance_by_regime.png` - Model vs Roll by regime
-- `ablation_k_regimes.png` - K=1-6 comparison
-- `ablation/ablation_summary.png` and axis overlays - Design ablation
-- `raw_temporal/equity_curves_gmvp.png` - Cumulative wealth
-- `regime/regime_probs_stacked.png` - Regime probability evolution
-- `regime/regime_filtering_effect.png` - Markov filtering demonstration
-- `transition_matrix_heatmap.png` - Regime transition probabilities
-- `raw_temporal/rolling_median_21d.png` - Temporal performance
-- `raw_temporal/method_overlays.png` - Metric time series
-
-**Raw Results:**
-
-- `results/regime_covariance/backtest.parquet` - Full backtest data
-- optional `results/ablation_k/backtest_k{1-6}.parquet` - K ablation data (if generated)
-
-See [docs/RESULTS_FINAL_REPORT.md](docs/RESULTS_FINAL_REPORT.md) for result summaries and figure captions.
 
 ## References
 
-[Add key papers from your proposal.]
+_Add your proposal / key papers here._
 
 ---
 
-Last updated: March 2026
+*Last updated: March 2026*

@@ -40,8 +40,6 @@ model:
   #   agglomerative_ward — linkage, temperature, eps
   #   modified_two_stage — outlier_quantile, n_init, temperature, eps
   #   signed_knn_spectral — n_neighbors, temperature, eps
-  #
-  # Slide-only (need extra inputs): hermitian_spectral, disg_co_clustering, dsbm → clear error if selected.
 
   # target object
   ddof: 1
@@ -103,12 +101,16 @@ guardrail:
   mode: "invalid_only" # "invalid_only" (recommended) | "ratio_or_invalid"
 
 mixing:
-  # Mixing for the "mix" method (covariance). Slightly more shrink → lower variance, small Sharpe cost.
-  # cov_mix_weights:
-  #   shrink: 0.55
-  #   pers: 0.2
-  #   model: 0.25
-  mix_lambda: 0.3 # legacy: S_mix = (1-lam) S_shrink + lam S_model (used only if cov_mix_weights omitted)
+  # Covariance mix: `cov_mix_weights` with model / shrink / pers / roll (nonnegative; normalized to sum 1).
+  # Omit `roll` or set roll: 0 for a 3-way mix. Or omit `cov_mix_weights` and use legacy `mix_lambda`:
+  #   S_mix = (1-λ) S_shrink + λ S_model.
+  cov_mix_weights:
+    model: 0.25
+    shrink: 0.35
+    pers: 0.4
+    roll: 0.0
+  # Optional if `cov_mix_weights` is set (covariance uses weights above). Still used for volatility mix + CSV column.
+  mix_lambda: 0.3
   shrink_gamma: 0.3 # baseline_shrink_to_diag gamma
 
 stability:

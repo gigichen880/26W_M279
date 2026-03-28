@@ -7,7 +7,7 @@
   },
   "guardrail_mode": "invalid_only",
   "pct_model_blended_to_pers": 100.0,
-  "model_pers_blend_lambda_mean": 0.6500000234030497,
+  "model_pers_blend_lambda_mean": 0.650000023391838,
   "model_pers_blend_lambda_min": 0.650000000086864,
-  "model_regime_conf_adj_mean": 2.5074696899114227e-08
+  "model_regime_conf_adj_mean": 2.5062684392649692e-08
 }

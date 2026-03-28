@@ -60,6 +60,11 @@ guardrail:
   trace_ratio_hi: 2.5
   mode: invalid_only
 mixing:
+  cov_mix_weights:
+    model: 0.25
+    shrink: 0.35
+    pers: 0.4
+    roll: 0.0
   mix_lambda: 0.3
   shrink_gamma: 0.3
 stability:

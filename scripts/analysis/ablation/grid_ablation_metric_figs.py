@@ -14,6 +14,10 @@ for that metric and prints the full winning run_tag and axis values in a text bo
 Usage:
   python -m scripts.analysis.ablation.grid_ablation_metric_figs \\
       --summary results/regime_covariance/ablation_phase2_joint/ablation_summary.csv
+
+  # 16 configs (l1 vs lp_p1 deduped) + compact labels for the paper:
+  python -m scripts.analysis.ablation.grid_ablation_metric_figs \\
+      --summary .../ablation_summary.csv --report
 """
 
 from __future__ import annotations
@@ -38,6 +42,83 @@ DEFAULT_METRICS: list[tuple[str, str, str, str]] = [
 ]
 
 CONFIG_KEYS = ("regime_clustering", "knn_metric", "pca_k", "tau", "k_neighbors")
+
+
+def _knn_equivalence_key(k: object) -> str:
+    """l1 and lp_p1 (Lp with p=1) are the same distance; collapse for deduping."""
+    s = str(k).strip().lower()
+    if s in ("l1", "lp_p1"):
+        return "l1"
+    return s
+
+
+def dedupe_l1_lp1(grid: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop duplicate grid rows that only differ by l1 vs lp_p1 knn_metric (same effective metric).
+    Keeps the row with knn_metric == l1 when both exist.
+    """
+    g = grid.copy()
+    g["_knn_eq"] = g["knn_metric"].map(_knn_equivalence_key)
+    g = g.sort_values(
+        ["regime_clustering", "_knn_eq", "pca_k", "tau", "k_neighbors", "knn_metric"],
+        ascending=[True, True, True, True, True, True],
+    )
+    # l1 sorts before lp_p1 → keep_first retains l1
+    g = g.drop_duplicates(
+        subset=["regime_clustering", "_knn_eq", "pca_k", "tau", "k_neighbors"],
+        keep="first",
+    )
+    return g.drop(columns=["_knn_eq"]).reset_index(drop=True)
+
+
+def recompute_pareto_flags(grid: pd.DataFrame) -> pd.DataFrame:
+    """is_pareto from model Sharpe / var / turnover (same rule as pareto_gmvp_report)."""
+    from scripts.analysis.ablation.pareto_gmvp_report import _to_matrix_for_pareto, pareto_efficient_mask
+
+    g = grid.copy()
+    Y, valid = _to_matrix_for_pareto(g)
+    mask = np.zeros(len(g), dtype=bool)
+    if valid.any():
+        Yv = Y[valid]
+        m = pareto_efficient_mask(Yv)
+        mask[np.where(valid)[0]] = m
+    g["is_pareto"] = mask
+    return g
+
+
+def _cluster_abbrev(rc: object) -> str:
+    s = str(rc).lower()
+    if "fuzzy" in s:
+        return "FCM"
+    if "agglomerative" in s or "ward" in s:
+        return "Ward"
+    return str(rc)[:8]
+
+
+def compact_axis_label(row: pd.Series) -> str:
+    """Short x tick: cluster | PCA D | τ | k (knn omitted after l1/lp dedupe)."""
+    return (
+        f"{_cluster_abbrev(row.get('regime_clustering'))} | "
+        f"D{int(row['pca_k'])} | "
+        f"τ={gfmt(row['tau'])} | "
+        f"k={int(row['k_neighbors'])}"
+    )
+
+
+def gfmt(x: object) -> str:
+    try:
+        v = float(x)
+        return str(int(v)) if v == int(v) else f"{v:g}"
+    except (TypeError, ValueError):
+        return str(x)
+
+
+# Short titles for paper-style figures (y-axis / title only)
+REPORT_TITLES: dict[str, str] = {
+    "model_mean": "Fro loss",
+    "model_gmvp_sharpe_mean": "GMVP Sharpe",
+    "model_gmvp_var_mean": "GMVP variance",
+}
 
 
 def _best_row_index(y: np.ndarray, direction: str) -> int:
@@ -95,15 +176,24 @@ def plot_metric_bars(
     out_path: str,
     *,
     direction: str,
+    report_style: bool = False,
 ) -> None:
     if direction not in {"min", "max"}:
         raise ValueError(f'direction must be "min" or "max", got {direction!r}')
 
-    sub = grid.sort_values("run_tag").reset_index(drop=True)
+    sort_cols = (
+        ["regime_clustering", "pca_k", "tau", "k_neighbors", "knn_metric"]
+        if report_style
+        else ["run_tag"]
+    )
+    sub = grid.sort_values(sort_cols).reset_index(drop=True)
     y = pd.to_numeric(sub[col], errors="coerce").to_numpy(dtype=float)
     n = len(sub)
     x = np.arange(n)
-    labels = [_short_label(t) for t in sub["run_tag"].astype(str)]
+    if report_style and all(c in sub.columns for c in CONFIG_KEYS):
+        labels = [compact_axis_label(sub.iloc[i]) for i in range(n)]
+    else:
+        labels = [_short_label(t) for t in sub["run_tag"].astype(str)]
 
     best_i = _best_row_index(y, direction)
     best_row = sub.iloc[best_i]
@@ -119,8 +209,8 @@ def plot_metric_bars(
     edgecolors[best_i] = "#f1c40f"
     edgewidths[best_i] = 3.0
 
-    fig_w = max(12.0, 0.42 * n)
-    fig_h = 7.8
+    fig_w = max(10.0, 0.52 * n) if report_style else max(12.0, 0.42 * n)
+    fig_h = 5.8 if report_style else 7.8
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.bar(
         x,
@@ -130,52 +220,86 @@ def plot_metric_bars(
         linewidth=edgewidths,
         alpha=0.92,
     )
+    rot = 35 if report_style else 72
+    fs = 8 if report_style else 6
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=72, ha="right", fontsize=6)
-    ax.set_ylabel(title.split("(")[0].strip(), fontsize=10)
+    ax.set_xticklabels(labels, rotation=rot, ha="right", fontsize=fs)
+
+    title_show = REPORT_TITLES.get(col, title.split("(")[0].strip()) if report_style else title.split("(")[0].strip()
+    if report_style:
+        ax.set_title(title_show, fontsize=13, fontweight="bold", pad=10)
+        ax.set_ylabel("Mean (horizon average)", fontsize=11)
+    else:
+        ax.set_ylabel(title.split("(")[0].strip(), fontsize=10)
+
     ax.grid(alpha=0.3, axis="y")
 
     note = _format_best_annotation(best_row, col, best_val, direction)
-    fig.suptitle(
-        title + "\n(gold outline = best bar on this plot)",
-        fontsize=11,
-        y=0.995,
-    )
-    fig.text(
-        0.02,
-        0.86,
-        note,
-        transform=fig.transFigure,
-        fontsize=7,
-        verticalalignment="top",
-        horizontalalignment="left",
-        family="monospace",
-        bbox=dict(boxstyle="round,pad=0.45", facecolor="#fffef5", edgecolor="#cccccc", alpha=0.95),
-    )
-    fig.subplots_adjust(top=0.58, bottom=0.22)
+    if report_style:
+        note_lines = note.split("\n")
+        note_short = "\n".join(
+            [
+                note_lines[0],
+                "",
+                f"{_cluster_abbrev(best_row.get('regime_clustering'))} | D{int(best_row['pca_k'])} | "
+                f"τ={gfmt(best_row['tau'])} | k={int(best_row['k_neighbors'])}",
+                f"knn: {best_row.get('knn_metric', '')}",
+            ]
+        )
+        fig.text(
+            0.01,
+            0.02,
+            note_short,
+            transform=fig.transFigure,
+            fontsize=8,
+            verticalalignment="bottom",
+            family="monospace",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#fffef5", edgecolor="#cccccc", alpha=0.95),
+        )
+        fig.subplots_adjust(bottom=0.28, top=0.92)
+    else:
+        fig.suptitle(
+            title + "\n(gold outline = best bar on this plot)",
+            fontsize=11,
+            y=0.995,
+        )
+        fig.text(
+            0.02,
+            0.86,
+            note,
+            transform=fig.transFigure,
+            fontsize=7,
+            verticalalignment="top",
+            horizontalalignment="left",
+            family="monospace",
+            bbox=dict(boxstyle="round,pad=0.45", facecolor="#fffef5", edgecolor="#cccccc", alpha=0.95),
+        )
+        fig.subplots_adjust(top=0.58, bottom=0.22)
 
     if "is_pareto" in sub.columns and sub["is_pareto"].fillna(False).any():
         from matplotlib.patches import Patch
 
+        lab_par = "Pareto frontier" if report_style else "Pareto (Sharpe / var / turnover)"
+        lab_dom = "Dominated" if report_style else "Dominated"
         ax.legend(
             handles=[
-                Patch(facecolor="#c0392b", edgecolor="black", label="Pareto (Sharpe / var / turnover)"),
-                Patch(facecolor="#4682b4", edgecolor="black", label="Dominated"),
-                Patch(facecolor="none", edgecolor="#f1c40f", linewidth=2.5, label="Best on this metric"),
+                Patch(facecolor="#c0392b", edgecolor="black", label=lab_par),
+                Patch(facecolor="#4682b4", edgecolor="black", label=lab_dom),
+                Patch(facecolor="none", edgecolor="#f1c40f", linewidth=2.5, label="Best on plot"),
             ],
-            loc="lower right",
+            loc="upper right",
             fontsize=8,
         )
     else:
         from matplotlib.patches import Patch
 
         ax.legend(
-            handles=[Patch(facecolor="none", edgecolor="#f1c40f", linewidth=2.5, label="Best on this metric")],
-            loc="lower right",
+            handles=[Patch(facecolor="none", edgecolor="#f1c40f", linewidth=2.5, label="Best on plot")],
+            loc="upper right",
             fontsize=8,
         )
 
-    fig.savefig(out_path, dpi=220, bbox_inches="tight")
+    fig.savefig(out_path, dpi=260 if report_style else 220, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -185,9 +309,22 @@ def run(
     *,
     pareto_flags_csv: str | None,
     metric_specs: list[tuple[str, str, str, str]] | None,
+    dedupe_l1_lp: bool = False,
+    report_style: bool = False,
 ) -> None:
     os.makedirs(out_dir, exist_ok=True)
-    grid = _load_grid_df(summary_csv, pareto_flags_csv)
+    if dedupe_l1_lp:
+        df = pd.read_csv(summary_csv)
+        grid = df[df.get("mode") == "grid"].copy()
+        if grid.empty:
+            raise ValueError("No rows with mode=='grid' in summary CSV.")
+        n0 = len(grid)
+        grid = dedupe_l1_lp1(grid)
+        grid = recompute_pareto_flags(grid)
+        grid.to_csv(os.path.join(out_dir, "deduped_grid_summary.csv"), index=False)
+        print(f"Deduped l1≡lp(p=1): {n0} → {len(grid)} configurations (saved deduped_grid_summary.csv).")
+    else:
+        grid = _load_grid_df(summary_csv, pareto_flags_csv)
     specs = metric_specs or DEFAULT_METRICS
     written = []
     for spec in specs:
@@ -195,8 +332,9 @@ def run(
         if col not in grid.columns:
             print(f"(skip) missing column: {col}", file=sys.stderr)
             continue
-        path = os.path.join(out_dir, f"{stem}.png")
-        plot_metric_bars(grid, col, descr, path, direction=direction)
+        suf = "_report" if report_style else ""
+        path = os.path.join(out_dir, f"{stem}{suf}.png")
+        plot_metric_bars(grid, col, descr, path, direction=direction, report_style=report_style)
         written.append(path)
     if not written:
         raise ValueError("No figures written; check metric column names vs CSV.")
@@ -222,11 +360,28 @@ def main() -> None:
         help='Optional: "col|title|stem|min" or "col|title|stem|max" per metric, semicolon-separated. '
         "Example: model_mean|Fro|fro|min;model_gmvp_sharpe_mean|Sharpe|sharpe|max",
     )
+    ap.add_argument(
+        "--dedupe-l1-lp",
+        action="store_true",
+        help="Collapse l1 vs lp_p1 (Lp with p=1) to one row each; recompute Pareto on the reduced grid.",
+    )
+    ap.add_argument(
+        "--report",
+        action="store_true",
+        help="Paper-style figures: short titles, compact x-labels, legend at top; implies --dedupe-l1-lp.",
+    )
     args = ap.parse_args()
 
     summary_csv = os.path.abspath(args.summary)
     sdir = os.path.dirname(summary_csv)
-    out_dir = args.outdir or os.path.join(sdir, "figs_grid_metrics")
+    dedupe = bool(args.dedupe_l1_lp or args.report)
+    report_style = bool(args.report)
+    if args.outdir:
+        out_dir = args.outdir
+    elif report_style:
+        out_dir = os.path.join(sdir, "figs_grid_metrics_report")
+    else:
+        out_dir = os.path.join(sdir, "figs_grid_metrics")
     pareto = args.pareto_flags
     if pareto is None:
         cand = os.path.join(sdir, "pareto", "grid_with_pareto_flags.csv")
@@ -251,7 +406,14 @@ def main() -> None:
                 raise ValueError(f'Expected col|title|stem or col|title|stem|min|max, got: "{part}"')
             metric_specs.append((col, title, _safe_filename_stem(stem), direction))
 
-    run(summary_csv, out_dir, pareto_flags_csv=pareto, metric_specs=metric_specs)
+    run(
+        summary_csv,
+        out_dir,
+        pareto_flags_csv=pareto,
+        metric_specs=metric_specs,
+        dedupe_l1_lp=dedupe,
+        report_style=report_style,
+    )
 
 
 if __name__ == "__main__":

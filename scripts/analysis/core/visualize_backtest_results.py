@@ -248,7 +248,6 @@ _REPORT_KEY_METRICS = [
     ("cov_error_mean", "fro", "Frobenius error", False),
     ("gmvp_mean", "gmvp_sharpe", "GMVP Sharpe", True),
     ("gmvp_mean", "gmvp_var", "GMVP variance", False),
-    ("gmvp_mean", "gmvp_vol", "GMVP vol", False),
     ("gmvp_mean", "turnover_l1", "Turnover L1", False),
 ]
 

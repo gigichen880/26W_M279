@@ -5,7 +5,11 @@ Writes under results/<tag>/figs/statistical_comparison/:
   - model_vs_baselines.png, mix_vs_baselines.png — boxplots of daily paired differences
   - model_vs_baselines_meanbars.png, mix_vs_baselines_meanbars.png — horizontal bars of
     mean paired advantage (+ = reference better), with paired t-stat and significance
+  - paired_comparison_summary_model.csv, paired_comparison_summary_mix.csv — median Δ̃ and
+    Wilcoxon p per metric×baseline (same construction as the boxplots; cite these, not report.csv)
   - forecast_correlation.png (+ .csv) — correlation of model/baseline metric series
+
+Headless runs: `MPLBACKEND=Agg python -m scripts.analysis.core.visualize_statistical_comparison ...`
 """
 
 from pathlib import Path
@@ -232,6 +236,56 @@ def plot_mean_advantage_bars(
     plt.close(fig)
 
 
+def paired_wilcoxon_summary(
+    raw_df: pd.DataFrame,
+    *,
+    reference: str,
+    baselines: tuple[str, ...],
+    key_metrics: list[str],
+    lower_is_better: set,
+) -> pd.DataFrame:
+    """
+    Same paired differences as `plot_statistical_comparison` (positive = reference better).
+    Median advantage + Wilcoxon signed-rank p-value per (metric, baseline).
+    """
+    rows: list[dict] = []
+    for metric in key_metrics:
+        col_ref = f"{reference}_{metric}"
+        if col_ref not in raw_df.columns:
+            continue
+        ref_vals = pd.to_numeric(raw_df[col_ref], errors="coerce")
+        higher_better = metric not in lower_is_better
+        for baseline in baselines:
+            col_base = f"{baseline}_{metric}"
+            if col_base not in raw_df.columns:
+                continue
+            base_vals = pd.to_numeric(raw_df[col_base], errors="coerce")
+            valid = np.isfinite(ref_vals) & np.isfinite(base_vals)
+            r = ref_vals.loc[valid].values
+            b = base_vals.loc[valid].values
+            if len(r) < 2:
+                continue
+            raw_diff = r - b
+            diff = raw_diff if higher_better else -raw_diff
+            med = float(np.median(diff))
+            try:
+                _, p = stats.wilcoxon(diff)
+            except Exception:
+                p = np.nan
+            rows.append(
+                {
+                    "reference": reference,
+                    "metric": metric,
+                    "baseline": baseline,
+                    "n_pairs": int(len(r)),
+                    "median_advantage": med,
+                    "wilcoxon_p": float(p) if np.isfinite(p) else np.nan,
+                    "sig": _sig_marker(float(p)) if np.isfinite(p) else "",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def plot_statistical_comparison(
     results_df: pd.DataFrame,
     raw_df: pd.DataFrame,
@@ -427,6 +481,26 @@ def main():
     saved: list[Path] = []
 
     model_results = compare_vs_reference(df, reference="model", baselines=("roll", "pers", "shrink"), metrics=metrics)
+    summ_model = paired_wilcoxon_summary(
+        df,
+        reference="model",
+        baselines=("shrink", "roll", "pers"),
+        key_metrics=key_metrics,
+        lower_is_better=lower,
+    )
+    summ_mix = paired_wilcoxon_summary(
+        df,
+        reference="mix",
+        baselines=("shrink", "roll", "pers"),
+        key_metrics=key_metrics,
+        lower_is_better=lower,
+    )
+    for name, sdf in (("paired_comparison_summary_model.csv", summ_model), ("paired_comparison_summary_mix.csv", summ_mix)):
+        if not sdf.empty:
+            p_csv = out_dir / name
+            sdf.to_csv(p_csv, index=False)
+            saved.append(p_csv)
+
     if "box" in want:
         p = out_dir / "model_vs_baselines.png"
         plot_statistical_comparison(model_results, df, p, key_metrics_plot=key_metrics, metric_labels=labels, lower_is_better=lower)

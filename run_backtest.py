@@ -80,24 +80,25 @@ def _mix_cov_multi(
     S_model: np.ndarray,
     S_shrink: np.ndarray,
     S_pers: np.ndarray,
+    S_roll: np.ndarray,
     w_model: float,
     w_shrink: float,
     w_pers: float,
+    w_roll: float = 0.0,
     proj_eps: float = 1e-8,
 ) -> np.ndarray:
     """
-    Multi-way convex combination for covariance mixing.
+    Multi-way convex combination for covariance mixing (model, shrink, pers, roll).
 
-    Weights are non-negative and normalized to sum to 1.
+    Weights are non-negative and normalized to sum to 1. Omit `roll` in YAML by setting weight 0.
     """
-    w = np.array([w_model, w_shrink, w_pers], dtype=float)
+    w = np.array([w_model, w_shrink, w_pers, w_roll], dtype=float)
     w = np.clip(w, 0.0, np.inf)
     s = float(w.sum())
     if not np.isfinite(s) or s <= 0:
-        # fallback: pure shrink
         return project_to_spd(((S_shrink + S_shrink.T) / 2.0), eps=proj_eps)
     w /= s
-    S = w[0] * S_model + w[1] * S_shrink + w[2] * S_pers
+    S = w[0] * S_model + w[1] * S_shrink + w[2] * S_pers + w[3] * S_roll
     return project_to_spd((S + S.T) / 2.0, eps=proj_eps)
 
 
@@ -341,7 +342,7 @@ def run_backtest(
     shrink_gamma: float,
     vol_dampen_toward_roll: float = 0.0,   # vol only: blend model toward rolling
     vol_dampen_toward_shrink: float = 0.0,  # vol only: blend model toward shrink (in addition to roll)
-    cov_mix_weights: dict | None = None,  # optional: {"shrink": w, "pers": w, "model": w} for 3-way mix (covariance only)
+    cov_mix_weights: dict | None = None,  # optional: model/shrink/pers/roll weights for 4-way mix (covariance only)
 
     # stability / floor
     floor_eps: float,
@@ -360,6 +361,8 @@ def run_backtest(
     # pipeline stability (improve GMVP variance)
     output_shrink_toward_diag: float = 0.0,  # blend model forecast with its diagonal; 0=off
     alpha_smooth_frac: float = 0.0,         # blend regime alpha with uniform; 0=off
+    # GMVP only: convex blend Σ_model ← S_shrink before inversion (matrix error metrics unchanged)
+    model_sigma_gmvp_shrink_blend: float = 0.0,
 ) -> pd.DataFrame:
     if not isinstance(returns_df.index, pd.DatetimeIndex):
         raise ValueError("returns_df.index must be a DatetimeIndex.")
@@ -406,6 +409,7 @@ def run_backtest(
     model_blend_to_pers_power = float(model_blend_to_pers_power)
     if not np.isfinite(model_blend_to_pers_power) or model_blend_to_pers_power <= 0:
         model_blend_to_pers_power = 1.0
+    model_sigma_gmvp_shrink_blend = float(np.clip(model_sigma_gmvp_shrink_blend, 0.0, 1.0))
     guardrail_mode = str(guardrail_mode).lower()
     if guardrail_mode not in {"invalid_only", "ratio_or_invalid"}:
         raise ValueError("guardrail_mode must be 'invalid_only' or 'ratio_or_invalid'")
@@ -655,7 +659,7 @@ def run_backtest(
                 eps=1e-8,
             )
 
-        # shrinkage / persistence / model mixing (hybrid)
+        # shrinkage / persistence / rolling / model mixing (hybrid)
         # Default behavior (if cov_mix_weights not provided) remains:
         #   S_mix = (1-lam)*S_shrink + lam*S_model
         cov_w = cov_mix_weights if isinstance(cov_mix_weights, dict) else {}
@@ -663,13 +667,16 @@ def run_backtest(
             w_model = float(cov_w.get("model", 0.0))
             w_shrink = float(cov_w.get("shrink", 0.0))
             w_pers = float(cov_w.get("pers", 0.0))
+            w_roll = float(cov_w.get("roll", 0.0))
             S_mix = _mix_cov_multi(
                 S_model=Sigma_hat_use,
                 S_shrink=S_shrink,
                 S_pers=S_pers,
+                S_roll=S_roll,
                 w_model=w_model,
                 w_shrink=w_shrink,
                 w_pers=w_pers,
+                w_roll=w_roll,
             )
         else:
             S_mix = _mix_cov(S_model=Sigma_hat_use, S_shrink=S_shrink, lam=float(mix_lambda))
@@ -677,8 +684,18 @@ def run_backtest(
         # ----------------------------
         # (6) GMVP strategy (optionally floored)
         # ----------------------------
+        # Optional GMVP-only blend toward shrinkage covariance (strong lever for lower realized gmvp_var).
+        # Fro/Stein/KL still use Sigma_hat_use via S_model_metric below when apply_floor_to == "gmvp_only".
+        Sigma_for_gmvp = Sigma_hat_use
+        if not is_vol and model_sigma_gmvp_shrink_blend > 0.0:
+            a = float(model_sigma_gmvp_shrink_blend)
+            Sigma_for_gmvp = project_to_spd(
+                (1.0 - a) * np.asarray(Sigma_hat_use, dtype=float) + a * np.asarray(S_shrink, dtype=float),
+                eps=1e-8,
+            )
+
         # Always floor for GMVP to keep inversion stable across methods.
-        S_model_use = _spd_floor(Sigma_hat_use, float(floor_eps))
+        S_model_use = _spd_floor(Sigma_for_gmvp, float(floor_eps))
         S_mix_use   = _spd_floor(S_mix,         float(floor_eps))
         S_roll_use  = _spd_floor(S_roll,        float(floor_eps))
         S_pers_use  = _spd_floor(S_pers,        float(floor_eps))
@@ -686,7 +703,11 @@ def run_backtest(
 
         # If the model target is precision, compute GMVP weights directly from precision (w ∝ P 1)
         if is_precision and (P_hat is not None) and (not bool(long_only)):
-            P_use = _spd_floor(P_hat, float(floor_eps))
+            if model_sigma_gmvp_shrink_blend > 0.0:
+                P_use = project_to_spd(np.linalg.inv(np.asarray(Sigma_for_gmvp, dtype=float)), eps=1e-8)
+                P_use = _spd_floor(P_use, float(floor_eps))
+            else:
+                P_use = _spd_floor(P_hat, float(floor_eps))
             ones = np.ones(P_use.shape[0])
             try:
                 x = P_use @ ones
@@ -905,7 +926,7 @@ def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple
         trace_ratio_lo=float(gcfg["trace_ratio_lo"]),
         trace_ratio_hi=float(gcfg["trace_ratio_hi"]),
         guardrail_mode=str(gcfg.get("mode", "invalid_only")),
-        mix_lambda=float(mixcfg["mix_lambda"]),
+        mix_lambda=float(mixcfg.get("mix_lambda", 0.3)),
         shrink_gamma=float(mixcfg["shrink_gamma"]),
         vol_dampen_toward_roll=float(mixcfg.get("vol_dampen_toward_roll", 0.0)),
         vol_dampen_toward_shrink=float(mixcfg.get("vol_dampen_toward_shrink", 0.0)),
@@ -922,6 +943,7 @@ def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple
         regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
         output_shrink_toward_diag=float(mcfg.get("output_shrink_toward_diag", 0)),
         alpha_smooth_frac=float(mcfg.get("alpha_smooth_frac", 0)),
+        model_sigma_gmvp_shrink_blend=float(stcfg.get("model_sigma_gmvp_shrink_blend", 0.0)),
     )
     return results, target_type
 
@@ -1023,7 +1045,7 @@ def main():
         trace_ratio_hi=float(gcfg["trace_ratio_hi"]),
         guardrail_mode=str(gcfg.get("mode", "invalid_only")),
 
-        mix_lambda=float(mixcfg["mix_lambda"]),
+        mix_lambda=float(mixcfg.get("mix_lambda", 0.3)),
         shrink_gamma=float(mixcfg["shrink_gamma"]),
         vol_dampen_toward_roll=float(mixcfg.get("vol_dampen_toward_roll", 0.0)),
         vol_dampen_toward_shrink=float(mixcfg.get("vol_dampen_toward_shrink", 0.0)),
@@ -1040,6 +1062,7 @@ def main():
         regime_weighting=str(mcfg.get("regime_weighting", "filtered")),
         output_shrink_toward_diag=float(mcfg.get("output_shrink_toward_diag", 0)),
         alpha_smooth_frac=float(mcfg.get("alpha_smooth_frac", 0)),
+        model_sigma_gmvp_shrink_blend=float(stcfg.get("model_sigma_gmvp_shrink_blend", 0.0)),
     )
 
     # Write canonical files

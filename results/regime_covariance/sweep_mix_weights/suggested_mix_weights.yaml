@@ -1,0 +1,6 @@
+# Picked from Pareto (2-way sweep): among var <= median(Pareto var), best Sharpe.
+# Under `mixing:` set mix_lambda and do NOT set cov_mix_weights (2-way blend).
+mix_lambda: 0.5
+
+# mix_gmvp_sharpe_mean: 1.4084692781565522
+# mix_gmvp_var_mean: 9.275322722319691e-05
