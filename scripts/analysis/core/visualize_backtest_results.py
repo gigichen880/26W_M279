@@ -54,18 +54,38 @@ def _metric_cols(df: pd.DataFrame, metric: str, methods: List[str]):
     return out
 
 
-def plot_equity_curves(df, outdir, methods):
-    """Single-panel plot: GMVP cumulative wealth for selected methods (see config `equity_methods`)."""
+def plot_equity_curves(df, outdir, methods, horizon: int = 20):
+    """Single-panel plot: GMVP cumulative wealth, corrected for overlapping windows.
+
+    Each ``{m}_gmvp_cumret`` is the compounded return over the full H-day holding
+    window, but evaluation rows are spaced ``stride`` (< H) days apart, so naively
+    doing ``cumprod(1 + gmvp_cumret)`` over every row double-counts each period
+    ~H/stride times. We instead stitch a disjoint set of anchors >= H trading days
+    apart, giving a non-overlapping wealth curve. (The full daily/tranched curve
+    that uses every anchor is produced by ``build_equity_curves`` from the per-day
+    ``gmvp_daily_returns`` artifact once the backtest has been re-run.)
+    """
     cols = _metric_cols(df, "gmvp_cumret", methods)
     if not cols:
         return
+    if "raw_anchor" not in df.columns:
+        # Cannot de-overlap without anchor indices; skip rather than draw a wrong curve.
+        print("[plot_equity_curves] no 'raw_anchor' column; skipping (would double-count).")
+        return
+
     plt.figure(figsize=(12, 5))
     for m, c in cols.items():
-        r = df[c].fillna(0.0)
-        eq = np.cumprod(1 + r)
-        plt.plot(eq.index, eq.values, label=m)
-    plt.title("GMVP Equity Curves")
-    plt.ylabel("Cumulative wealth")
+        sub = df[[c, "raw_anchor"]].dropna(subset=[c]).sort_values("raw_anchor")
+        chosen, last = [], None
+        for a in sub["raw_anchor"].tolist():
+            if last is None or a - last >= int(horizon):
+                chosen.append(a)
+                last = a
+        picked = sub[sub["raw_anchor"].isin(chosen)]
+        eq = np.cumprod(1.0 + picked[c].values)
+        plt.plot(picked.index, eq, label=m)
+    plt.title(f"GMVP Equity Curves (non-overlapping, H={horizon})")
+    plt.ylabel("Cumulative wealth (start = 1)")
     plt.legend()
     plt.grid(alpha=0.3)
     _savefig(os.path.join(outdir, "equity_curves_gmvp.png"))

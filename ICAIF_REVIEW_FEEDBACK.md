@@ -23,11 +23,27 @@ GMVP is a variance-minimization exercise, and the model has the highest ex-post 
 
 **Fix:** Confront it head-on. (a) Report ex-post variance with significance tests as a co-primary metric and acknowledge the model loses on it. (b) Investigate where the return comes from — factor exposures of the weight differences (market beta, size, low-vol tilt), or at least show the return gain is stable across subperiods. (c) Consider reframing: if your story is "regime-conditioning captures economically relevant structure," a mean-variance or risk-parity evaluation, or Diebold-Mariano tests on the matrix losses, may serve the claim better than GMVP alone.
 
-### 3. The per-date Sharpe metric is nonstandard and the wealth curve needs auditing
+### 3. [CONFIRMED] The wealth curve double-counts overlapping holding windows (~4× inflation); the Sharpe metric is nonstandard
 
-From `backtests.py`, `gmvp_sharpe` is an annualized Sharpe computed from each 20-day holding window's daily returns, then averaged across evaluation dates. Mean-of-per-window-Sharpes is not the strategy's Sharpe, is extremely noisy (20 observations per estimate, annualized with √252), and is never defined in the paper. Separately, `backtest.stride=5` with `horizon=20` means holding windows overlap 4×; if the wealth curve in Figure 4 compounds per-date cumulative returns sampled every 5 days, wealth is being double-counted ~4×. Terminal wealth of 9.47 over the ~7.3 years of actual valid evaluation is ~35%/yr for a minimum-variance portfolio, which is not plausible and strongly suggests exactly this overlap compounding (the equity-curve script could not be fully verified due to filesystem stalls — audit this before anything else, because if the curve is inflated, Figure 4 is your main exhibit and it's wrong).
+**Audit result (2026-07, verified against `backtest.csv` + code):**
+- `hold_period_portfolio_stats` returns `gmvp_cumret = prod(1 + rp) - 1` over the **full 20-trading-day holding window**.
+- `plot_equity_curves` (in `scripts/analysis/core/visualize_backtest_results.py`) builds the curve as `np.cumprod(1 + gmvp_cumret)` over evaluation rows.
+- Evaluation rows are spaced **5 trading days apart** (stride=5), but each `gmvp_cumret` spans 20 trading days → every period is compounded ~4×.
+- Reproduced the paper number exactly: as-plotted terminal wealth = **9.474** (paper: 9.47), implying **36%/yr CAGR** for a min-variance portfolio over 7.3 years — implausible.
+- Honest non-overlapping stitch (anchors ≥20 trading days apart): terminal wealth **1.88** (model), **9.1%/yr CAGR** — plausible.
 
-**Fix:** Define the Sharpe estimator explicitly in the paper; additionally report the standard whole-sample annualized Sharpe of a properly stitched non-overlapping (or correctly overlapping, e.g., 1/4-of-capital tranched) return series. Verify Figure 4's construction and state it in the caption.
+Corrected terminal wealth, all methods: Model 9.47→**1.88**, Pers 8.42→**1.82**, Mix 6.77→**1.68**, Shrink 4.40→**1.42**, Roll 4.32→**1.41**. Ranking survives, but every terminal-wealth figure in the paper is a ~4× artifact and Figure 4's shape is wrong. Note the honest curve makes model and persistence nearly tied (1.88 vs 1.82), reinforcing issue 5.
+
+Separately, `gmvp_sharpe` is a mean of per-window annualized Sharpes (each from 20 daily obs, ×√252) averaged across dates — noisy, nonstandard, never defined in the paper. This averaging is *not* affected by the compounding bug, but still needs replacing with a proper strategy-level Sharpe.
+
+**Fix:** (a) Rebuild the equity curve from a properly stitched non-overlapping (or 1/H-tranched overlapping) return series — ideally re-instrument the backtest to emit daily portfolio returns so a true daily curve and whole-sample Sharpe can be computed. (b) Define the Sharpe estimator explicitly in the paper and report the whole-sample annualized Sharpe. (c) Correct every terminal-wealth number and redraw Figure 4 with its construction stated in the caption.
+
+**Fix status (code landed, pending batched re-run with issue 1):**
+- `run_backtest.py` now emits `results/<tag>/gmvp_daily_returns.parquet` — per-day GMVP returns per method, tagged by anchor + calendar date (covariance path only).
+- `scripts/analysis/core/build_equity_curves.py` builds both a **tranched** (all-anchor, overlap-corrected) and a **non-overlapping** daily curve, plus whole-sample annualized Sharpe + terminal wealth (`equity_curve_summary.csv`). Falls back to a non-overlapping stitch of `*_gmvp_cumret` until the re-run produces the per-day artifact.
+- `plot_equity_curves` (viz pipeline) rewritten to stitch non-overlapping windows instead of `cumprod` over overlapping rows.
+- Honest numbers from the fallback (existing data): terminal wealth model **1.88**, pers **1.82**, mix 1.68, shrink 1.42, roll 1.41; whole-sample (window-level) Sharpe model **0.58** vs pers **0.55** — model and persistence nearly tied, consistent with the block bootstrap.
+- Remaining: re-run backtest to produce the per-day artifact + true daily tranched Sharpe, then update Figure 4 and every terminal-wealth/Sharpe number in the paper (batched with the issue-1 tuning-split re-run).
 
 ### 4. Silent sample selection: 293 of 662 dates dropped, and the GFC never enters the portfolio results
 

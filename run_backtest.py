@@ -417,6 +417,11 @@ def run_backtest(
     # GMVP stability tracking per method (covariance only)
     w_prev = {"model": None, "mix": None, "roll": None, "pers": None, "shrink": None}
 
+    # Per-day GMVP portfolio returns, tagged by anchor and calendar date, so an
+    # honest (non-overlapping / tranched) equity curve can be built downstream
+    # instead of naively compounding overlapping H-day holding returns.
+    daily_rows = []
+
     def _turnover(w_prev_i, w_now):
         if w_prev_i is None:
             return np.nan
@@ -739,6 +744,26 @@ def run_backtest(
         s_pers  = hold_period_portfolio_stats(fut=fut, w=w_pers_i)
         s_shrk  = hold_period_portfolio_stats(fut=fut, w=w_shrk_i)
 
+        # Record each holding day's realized GMVP return with its calendar date,
+        # keyed by anchor. Weights are held fixed over the H-day window (fut @ w).
+        # Downstream this supports a non-overlapping stitch or a 1/H-tranched
+        # overlapping-portfolio curve, both free of the stride/horizon double-count.
+        fut_dates = dates[raw_anchor + 1 : raw_anchor + int(horizon) + 1]
+        for meth, w_meth in (
+            ("model", w_model), ("mix", w_mix), ("roll", w_roll_i),
+            ("pers", w_pers_i), ("shrink", w_shrk_i),
+        ):
+            rp_meth = np.asarray(fut, dtype=float) @ np.asarray(w_meth, dtype=float)
+            for j in range(len(fut_dates)):
+                daily_rows.append({
+                    "date": fut_dates[j],
+                    "anchor_date": anchor_date,
+                    "raw_anchor": int(raw_anchor),
+                    "day_offset": int(j),
+                    "method": meth,
+                    "ret": float(rp_meth[j]),
+                })
+
         # ----------------------------
         # (7) Matrix metrics: floored or not
         # ----------------------------
@@ -821,7 +846,12 @@ def run_backtest(
             "Likely causes: burn_in too large, NA validation too strict, or prediction/target exceptions."
         )
 
-    return pd.DataFrame(rows).set_index("date").sort_index()
+    daily_df = (
+        pd.DataFrame(daily_rows)
+        if daily_rows
+        else pd.DataFrame(columns=["date", "anchor_date", "raw_anchor", "day_offset", "method", "ret"])
+    )
+    return pd.DataFrame(rows).set_index("date").sort_index(), daily_df
 
 def build_report_table(results_df: pd.DataFrame, target_type: str = "covariance") -> pd.DataFrame:
     rows = []
@@ -887,7 +917,7 @@ def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple
     ).T
     returns_df.index = pd.to_datetime(returns_df.index)
 
-    results = run_backtest(
+    results, _daily_df = run_backtest(
         returns_df=returns_df,
         target_type=target_type,
         start_date=dcfg.get("start_date"),
@@ -996,7 +1026,7 @@ def main():
 
     target_type = str(cfg.get("model", {}).get("target", "covariance")).lower()
 
-    results = run_backtest(
+    results, daily_df = run_backtest(
         returns_df=returns_df,
         target_type=target_type,
         start_date=dcfg.get("start_date"),
@@ -1068,6 +1098,12 @@ def main():
     # Write canonical files
     results.to_parquet(os.path.join(tag_dir, "backtest.parquet"))
     results.to_csv(os.path.join(tag_dir, "backtest.csv"))
+
+    # Per-day GMVP returns for honest (non-overlapping / tranched) equity curves.
+    if daily_df is not None and len(daily_df) > 0:
+        daily_path = os.path.join(tag_dir, "gmvp_daily_returns.parquet")
+        daily_df.to_parquet(daily_path, index=False)
+        print(f"  {daily_path}")
 
     # dump resolved config used
     import yaml
