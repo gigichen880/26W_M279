@@ -17,6 +17,16 @@ The paper honestly flags that hyperparameters were tuned on 2015–2021, which o
 - Alternatively, do anchored walk-forward tuning (re-select config each year using only past data).
 - At absolute minimum, report the tuned-period and held-out-period results in separate columns and move this disclosure from a mid-paragraph aside into the results table itself. But note this weak version probably still draws the criticism.
 
+**Fix status (DONE — decisive, 2026-07-08/09).** Split: tune 2008–2016, hold out 2017–2021. Re-ran the Phase-2 joint grid (32 configs) on 2008–2016 only (`configs/ablation_phase2_tune0816.yaml`, scai4). Selected config (highest tuning Sharpe + Pareto): fuzzy_cmeans, l1, **pca_k=48**, tau=2.0, k=10 — identical to the paper's config except pca_k 40→48, so re-tuning re-selects essentially the same model. Ran the full 2008–2021 backtest with it (tag `oos_final`) and sliced the honest daily tranched Sharpe:
+
+| Period | Model | Pers | Mix | Roll | Shrink |
+|---|---|---|---|---|---|
+| Tuning 2008–2016 (in-sample) | 0.694 | **0.750** | 0.733 | 0.687 | 0.685 |
+| **Held-out 2017–2021 (OOS)** | 0.582 | **0.635** | 0.597 | 0.566 | 0.546 |
+| Full 2008–2021 | 0.654 | **0.707** | 0.682 | 0.641 | 0.632 |
+
+**Persistence beats the model out-of-sample on daily Sharpe (0.635 vs 0.582, model ranks 3rd) and on terminal wealth (1.511 vs 1.501).** Even in-sample on the honest metric persistence leads; the model only "wins" on the noisy per-window Sharpe it was selected on. Combined with issues 3+4, the paper's central claim of "statistically significant / substantial improvements in risk-adjusted portfolio performance" over persistence does **not** survive honest accounting. The defensible paper is now a *negative/nuanced* result: regime-aware similarity conditioning matches the shrinkage/rolling baselines but does not beat realized-covariance persistence for GMVP on this universe. This needs a decision from the authors on reframing (see summary).
+
 ### 2. The model is worst-in-class at the objective the portfolio is built for
 
 GMVP is a variance-minimization exercise, and the model has the highest ex-post GMVP variance of all five methods (9.88×10⁻⁵ vs 8.78 rolling, 8.88 mix, 8.93 persistence, 9.15 shrink — confirmed in `report.csv`). The Sharpe advantage therefore comes entirely from the return side, which a covariance forecast doesn't predict and GMVP doesn't optimize. The standard referee attack: "your covariance forecast produces the worst minimum-variance portfolio; the Sharpe gain is an unexplained return effect, possibly a factor tilt or luck." The paper currently buries this in a half-sentence ("higher realized variance and turnover").
