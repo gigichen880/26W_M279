@@ -37,6 +37,7 @@ from similarity_forecast.backtests import (
     baseline_shrink_vol_toward_cs_mean,
     gmvp_weights,
     hold_period_portfolio_stats,
+    gmvp_daily_returns_renorm,
 )
 from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder, VolStatsEmbedder
 from similarity_forecast.target_objects import CovarianceTarget, PrecisionTarget, VolTarget
@@ -753,7 +754,7 @@ def run_backtest(
             ("model", w_model), ("mix", w_mix), ("roll", w_roll_i),
             ("pers", w_pers_i), ("shrink", w_shrk_i),
         ):
-            rp_meth = np.asarray(fut, dtype=float) @ np.asarray(w_meth, dtype=float)
+            rp_meth = gmvp_daily_returns_renorm(fut, w_meth)
             for j in range(len(fut_dates)):
                 daily_rows.append({
                     "date": fut_dates[j],

@@ -438,6 +438,43 @@ def gmvp_weights(
 
     return w.astype(float)
 
+def gmvp_daily_returns_renorm(
+    fut: NDArray[np.floating],     # (H, N) future returns, may contain NaN (e.g. pre-IPO)
+    w: NDArray[np.floating],       # (N,)
+    eps: float = 1e-8,
+) -> NDArray[np.floating]:
+    """
+    Per-day realized portfolio return holding w fixed, robust to missing assets.
+
+    On each holding day we invest only in the assets that trade that day and
+    renormalize their weights to sum to the observed weight mass, so the portfolio
+    stays fully invested in what is tradable rather than dropping the whole day
+    when any single name is missing. When nothing is missing this is exactly
+    ``fut @ w`` (GMVP weights already sum to 1), so fully-observed periods are
+    unchanged; it only recovers partial-universe days (early years) that would
+    otherwise be discarded. If the observed weights sum to ~0 (long/short legs
+    cancel), we fall back to treating missing names as cash for that day.
+
+    Returns an (H,) array; a day with no observed asset is NaN.
+    """
+    fut = np.asarray(fut, dtype=float)
+    w = np.asarray(w, dtype=float)
+    H = fut.shape[0]
+    rp = np.full(H, np.nan, dtype=float)
+    for t in range(H):
+        row = fut[t]
+        m = np.isfinite(row)
+        if not m.any():
+            continue
+        wo = w[m]
+        s = float(wo.sum())
+        if abs(s) < eps:
+            rp[t] = float(wo @ row[m])          # weights cancel: missing = cash
+        else:
+            rp[t] = float((wo / s) @ row[m])    # renormalize over tradable names
+    return rp
+
+
 def hold_period_portfolio_stats(
     fut: NDArray[np.floating],     # (H, N) future returns
     w: NDArray[np.floating],       # (N,)
@@ -455,7 +492,7 @@ def hold_period_portfolio_stats(
     fut = np.asarray(fut, dtype=float)
     w = np.asarray(w, dtype=float)
 
-    rp = fut @ w  # (H,)
+    rp = gmvp_daily_returns_renorm(fut, w)  # (H,), robust to missing assets
     rp = rp[np.isfinite(rp)]
     if rp.size == 0:
         return {
