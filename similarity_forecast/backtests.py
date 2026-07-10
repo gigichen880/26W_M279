@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
-from .core import project_to_spd, cov_from_returns
+from .core import project_to_spd, cov_from_returns, impute_returns_window
 
 def frobenius_error(S_hat: NDArray[np.floating], S_true: NDArray[np.floating]) -> float:
     S_hat = np.asarray(S_hat, dtype=float)
@@ -209,6 +209,46 @@ def baseline_persistence_realized_cov(R: np.ndarray, raw_anchor: int, horizon: i
 def baseline_shrink_to_diag(S: np.ndarray, gamma: float = 0.3) -> np.ndarray:
     D = np.diag(np.diag(S))
     return (1.0 - gamma) * S + gamma * D
+
+
+# ---------- Real (data-driven) covariance baselines for issue #6 ----------
+# These replace the fixed-gamma diagonal-shrink strawman with the estimators the
+# literature (and the paper's own citations) actually use. All take a raw past
+# window (T, N) that may contain NaN; they impute with the same window policy the
+# other baselines use (cov_from_returns -> impute_returns_window) so the
+# comparison is apples-to-apples, then SPD-project.
+
+def baseline_ledoit_wolf(past: np.ndarray, ddof: int = 1) -> np.ndarray:
+    """Ledoit-Wolf linear shrinkage toward scaled identity (data-driven intensity)."""
+    from sklearn.covariance import LedoitWolf
+    X = impute_returns_window(np.asarray(past, dtype=float), fill_all_nan=0.0)
+    cov = LedoitWolf(assume_centered=False).fit(X).covariance_
+    return project_to_spd((cov + cov.T) / 2.0, eps=1e-8)
+
+
+def baseline_oas(past: np.ndarray, ddof: int = 1) -> np.ndarray:
+    """Oracle Approximating Shrinkage (Chen et al. 2010); often improves on LW for small T."""
+    from sklearn.covariance import OAS
+    X = impute_returns_window(np.asarray(past, dtype=float), fill_all_nan=0.0)
+    cov = OAS(assume_centered=False).fit(X).covariance_
+    return project_to_spd((cov + cov.T) / 2.0, eps=1e-8)
+
+
+def baseline_ewma_cov(past: np.ndarray, lam: float = 0.94, ddof: int = 1) -> np.ndarray:
+    """RiskMetrics EWMA covariance: exponentially weighted, most recent row heaviest.
+
+    S = sum_i w_i (x_i - xbar)(x_i - xbar)^T,  w_i propto lam^(age_i), sum w = 1,
+    age 0 = most recent row. lam=0.94 is the RiskMetrics daily default.
+    """
+    X = impute_returns_window(np.asarray(past, dtype=float), fill_all_nan=0.0)
+    T, _ = X.shape
+    X = X - X.mean(axis=0, keepdims=True)
+    ages = np.arange(T - 1, -1, -1)              # row 0 is oldest -> largest age
+    w = (1.0 - lam) * lam ** ages
+    w = w / w.sum()
+    Xw = X * np.sqrt(w)[:, None]
+    cov = Xw.T @ Xw
+    return project_to_spd((cov + cov.T) / 2.0, eps=1e-8)
 
 
 # ---------- Realized volatility (log-vol) baselines and metrics ----------

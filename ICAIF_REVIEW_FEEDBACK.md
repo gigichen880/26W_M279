@@ -85,6 +85,20 @@ The "shrinkage" baseline is a fixed γ=0.3 blend toward the diagonal — a straw
 
 **Fix (minimum viable set):** actual Ledoit-Wolf (sklearn's `LedoitWolf` is a drop-in), EWMA covariance (λ=0.94), and HAR for the volatility section. DCC-NL if time permits. If the model only beats weak baselines, better to know now than from the reviews.
 
+**Fix status (DONE for covariance baselines — the result is unflattering, 2026-07-10).** Added `baseline_ledoit_wolf`, `baseline_oas`, `baseline_ewma_cov` to `backtests.py` and evaluated them faithfully on the same OOS harness/anchors (`scripts/analysis/core/eval_extra_baselines.py`, tag `oos_final`, held-out 2017–2021):
+
+| Method | GMVP Sharpe | Stein | KL | Frobenius |
+|---|---|---|---|---|
+| Persistence | 0.635 | 2.2e6 | 1.1e6 | 0.0295 |
+| EWMA(0.94) | 0.632 | 1.1e6 | 5.5e5 | 0.0272 |
+| Model | 0.582 | 1095 | 548 | **0.0252** |
+| Rolling | 0.566 | 1.1e6 | 5.5e5 | 0.0280 |
+| **Ledoit-Wolf** | 0.549 | **839** | **420** | 0.0260 |
+| OAS | 0.554 | 869 | 434 | 0.0265 |
+| Shrink γ=.3 | 0.546 | 845 | 423 | 0.0246 |
+
+**The real baselines remove the statistical-forecasting salvage.** On Stein/KL, real Ledoit-Wolf and OAS *beat* the model (LW Stein 839 vs model 1095) — the model's apparent Stein/KL edge existed only against the weak rolling/persistence baselines and the γ=0.3 strawman. The model leads only on Frobenius (0.0252, marginal). On GMVP Sharpe held-out, EWMA(0.94) (0.632) ≈ persistence, both above the model (0.582); all pairwise model-vs-baseline differences remain statistical ties (block bootstrap p=0.70–0.78). Net: against properly constructed estimators the model does **not** dominate on statistical accuracy *or* portfolio performance — it is on par (tie on GMVP, ~LW-family on matrix losses, slightly worse on Stein/KL, slightly better on Frobenius). The honest contribution is a modular regime-aware framework that *matches* standard estimators with added regime interpretability — not a performance win. (HAR for the volatility target still TODO.)
+
 ---
 
 ## Part 2: Serious but straightforward issues
