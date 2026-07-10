@@ -39,6 +39,7 @@ from similarity_forecast.backtests import (
     hold_period_portfolio_stats,
     gmvp_daily_returns_renorm,
 )
+from similarity_forecast.regime_labels import attach_regime_labels_from_data, compute_horizon_cross_sectional_stats
 from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder, VolStatsEmbedder
 from similarity_forecast.target_objects import CovarianceTarget, PrecisionTarget, VolTarget
 from similarity_forecast.core import (
@@ -579,12 +580,17 @@ def run_backtest(
             m_roll  = eval_vol_metrics(vol_roll, vol_true)
             m_pers  = eval_vol_metrics(vol_pers, vol_true)
             m_shrk  = eval_vol_metrics(vol_shrink, vol_true)
+            hx = compute_horizon_cross_sectional_stats(fut)
             row = {
                 "date": anchor_date,
                 "raw_anchor": int(raw_anchor),
                 "mix_lambda": float(mix_lambda),
                 "shrink_gamma": float(shrink_gamma),
                 "regime_assigned": regime_assigned,
+                "dominant_regime": regime_assigned,
+                "realized_vol": hx["realized_vol"],
+                "avg_corr": hx["avg_corr"],
+                "market_ret": hx["market_ret"],
             }
             for k in range(K_regimes):
                 row[f"regime_prob_{k}"] = float(alpha_t[k])
@@ -790,6 +796,7 @@ def run_backtest(
         # ----------------------------
         # (8) Row (including regime data)
         # ----------------------------
+        hx = compute_horizon_cross_sectional_stats(fut)
         row = {
             "date": anchor_date,
             "raw_anchor": int(raw_anchor),
@@ -810,6 +817,10 @@ def run_backtest(
             "floor_eps": float(floor_eps),
             "apply_floor_to": str(apply_floor_to),
             "regime_assigned": regime_assigned,
+            "dominant_regime": regime_assigned,
+            "realized_vol": hx["realized_vol"],
+            "avg_corr": hx["avg_corr"],
+            "market_ret": hx["market_ret"],
         }
         for k in range(K_regimes):
             row[f"regime_prob_{k}"] = float(alpha_t[k])
@@ -976,6 +987,10 @@ def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple
         alpha_smooth_frac=float(mcfg.get("alpha_smooth_frac", 0)),
         model_sigma_gmvp_shrink_blend=float(stcfg.get("model_sigma_gmvp_shrink_blend", 0.0)),
     )
+    try:
+        results = attach_regime_labels_from_data(results, save_json_path=None)
+    except Exception:
+        pass
     return results, target_type
 
 
@@ -1095,6 +1110,14 @@ def main():
         alpha_smooth_frac=float(mcfg.get("alpha_smooth_frac", 0)),
         model_sigma_gmvp_shrink_blend=float(stcfg.get("model_sigma_gmvp_shrink_blend", 0.0)),
     )
+
+    try:
+        results = attach_regime_labels_from_data(
+            results,
+            save_json_path=os.path.join(tag_dir, "regime_name_map.json"),
+        )
+    except Exception as exc:
+        print(f"Note: regime semantic labels not attached ({exc})")
 
     # Write canonical files
     results.to_parquet(os.path.join(tag_dir, "backtest.parquet"))
