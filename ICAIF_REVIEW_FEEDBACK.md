@@ -1,23 +1,18 @@
-# ICAIF Reviewer-Style Critique & Fix List
+# ICAIF Submission — Current State of Pipeline & Results
 
-*Internal working doc — not for submission. Review of the current paper draft cross-checked against `results/regime_covariance/` outputs and `similarity_forecast/` code.*
+*Internal working doc. Describes the pipeline and evaluation **as they stand now**, after the validity corrections, cross-checked against `results/oos_final/`, `results/regime_cov_renorm/`, `results/vol_oos/`, and the `similarity_forecast/` code. All portfolio and forecast numbers are the honest, out-of-sample figures unless noted otherwise.*
 
-**Verdict:** In its current form this would likely get "reject" or at best "major revision" — not because the idea is weak, but because the headline evidence is mostly in-sample, the portfolio metric works against you, and the paper isn't in submission format. All of these are fixable.
+**Where things stand.** The pipeline is a modular regime-aware similarity forecaster evaluated on a clean out-of-sample split: hyperparameters are selected on 2008–2016 and every headline number is held-out 2017–2021. Against properly constructed baselines (Ledoit-Wolf, OAS, EWMA/RiskMetrics, HAR), the model does **not** beat baselines on any target. It is a statistical tie with all baselines on GMVP Sharpe; on covariance matrix losses it is on par with shrinkage (slightly worse than Ledoit-Wolf on Stein/KL, slightly better on Frobenius); on volatility it trails HAR with a negative held-out R². The defensible contribution is a **modular regime-aware framework that matches standard estimators, with interpretable regime structure** — a methodological/exploratory result, not a performance win. How (or whether) to frame this for the current cycle is an open author decision (see `ADVISOR_SUMMARY.md`).
 
 ---
 
-## Part 1: Fatal-if-unfixed issues
+## Part 1: Current results
 
-### 1. The portfolio evaluation is almost entirely inside the tuning window (worse than the paper discloses)
+### 1. Out-of-sample GMVP performance is a statistical tie with every baseline
 
-The paper honestly flags that hyperparameters were tuned on 2015–2021, which overlaps the evaluation window, and says "the genuinely out-of-sample portion is the pre-2015 period." But I verified against `results/regime_covariance/backtest.csv`: valid GMVP dates run 2014-03-10 to 2021-06-29, and only 42 of the 369 GMVP dates fall before 2015. So ~89% of the portfolio evidence — including the headline Sharpe 1.57 — sits inside the period the configuration was selected on. The "out-of-sample" pre-2015 portion barely exists for portfolio metrics. A careful reviewer will reconstruct this from Figure 4 (flat until 2014) and the date counts in Section 6, and it undermines the central empirical claim.
+Hyperparameters are selected on the tuning window (2008–2016) via the Phase-2 joint grid (32 configs, `configs/ablation_phase2_tune0816.yaml`) and held fixed for the 2017–2021 held-out evaluation. The selected config — fuzzy_cmeans, l1, **pca_k=48**, tau=2.0, k=10 — is the paper's config except pca_k (40→48), so re-tuning re-selects essentially the same model. Full 2008–2021 backtest under tag `oos_final`.
 
-**Fix (pick one, in descending order of strength):**
-- Re-tune on pre-2015 data only (or 2015–2018), and report 2015–2021 (or 2019–2021) as genuinely held-out. This is the clean fix and your ablation infrastructure makes it cheap.
-- Alternatively, do anchored walk-forward tuning (re-select config each year using only past data).
-- At absolute minimum, report the tuned-period and held-out-period results in separate columns and move this disclosure from a mid-paragraph aside into the results table itself. But note this weak version probably still draws the criticism.
-
-**Fix status (DONE — decisive, 2026-07-08/09).** Split: tune 2008–2016, hold out 2017–2021. Re-ran the Phase-2 joint grid (32 configs) on 2008–2016 only (`configs/ablation_phase2_tune0816.yaml`, scai4). Selected config (highest tuning Sharpe + Pareto): fuzzy_cmeans, l1, **pca_k=48**, tau=2.0, k=10 — identical to the paper's config except pca_k 40→48, so re-tuning re-selects essentially the same model. Ran the full 2008–2021 backtest with it (tag `oos_final`) and sliced the honest daily tranched Sharpe:
+Honest daily tranched Sharpe (overlap-corrected, GFC included):
 
 | Period | Model | Pers | Mix | Roll | Shrink |
 |---|---|---|---|---|---|
@@ -25,67 +20,37 @@ The paper honestly flags that hyperparameters were tuned on 2015–2021, which o
 | **Held-out 2017–2021 (OOS)** | 0.582 | **0.635** | 0.597 | 0.566 | 0.546 |
 | Full 2008–2021 | 0.654 | **0.707** | 0.682 | 0.641 | 0.632 |
 
-On the point estimate, persistence leads the model out-of-sample on daily Sharpe (0.635 vs 0.582) and terminal wealth (1.511 vs 1.501). **But a moving-block bootstrap (block=20, 20k resamples, `scripts/analysis/core/oos_significance.py`) shows the held-out model-vs-baseline Sharpe gap is NOT significant for ANY baseline:** model−pers Δ=−0.053 p=0.70 CI[−0.27,+0.20]; model−shrink Δ=+0.036 p=0.72; model−roll Δ=+0.016 p=0.86; model−mix Δ=−0.015 p=0.91. So the accurate OOS statement is **parity — no significant difference on GMVP Sharpe vs any baseline**, not "loses to persistence" (and not "beats" anything either; p≈0.7 is also low power on 1255 noisy days).
+On the point estimate, persistence leads the model out-of-sample on daily Sharpe (0.635 vs 0.582) and terminal wealth (1.511 vs 1.501). But a moving-block bootstrap (block=20, 20k resamples, `scripts/analysis/core/oos_significance.py`) shows the held-out model-vs-baseline Sharpe gap is **not significant for any baseline**: model−pers Δ=−0.053 p=0.70 CI[−0.27,+0.20]; model−shrink Δ=+0.036 p=0.72; model−roll Δ=+0.016 p=0.86; model−mix Δ=−0.015 p=0.91. The accurate statement is **parity — no significant difference on GMVP Sharpe versus any baseline** (neither a loss nor a win; p≈0.7 also reflects low power on ~1255 noisy days).
 
-**Honest headline for the paper:** out-of-sample the model is a statistical tie with all baselines on GMVP Sharpe, while being a genuinely strong covariance *forecaster* (Stein/KL ~1000× better than rolling/persistence, competitive with shrinkage). The "substantial/significant risk-adjusted improvement over baselines" claim must go; the defensible framing is **GMVP parity + forecast-quality edge + regime interpretability**. This is achievable with NO test-set tuning. Reframing direction is an author decision (see summary).
+### 2. The model has the highest ex-post GMVP variance
 
-### 2. The model is worst-in-class at the objective the portfolio is built for
+GMVP is a variance-minimization exercise, and the model produces the highest ex-post GMVP variance of the five core methods (9.88×10⁻⁵ vs 8.78 rolling, 8.88 mix, 8.93 persistence, 9.15 shrink; `report.csv`). Any Sharpe parity therefore comes from the return side — which a covariance forecast does not predict and GMVP does not optimize — so the model is the *worst* minimum-variance portfolio while being *tied* on Sharpe. This is the natural referee attack surface: the covariance forecast yields the worst min-variance portfolio and any return effect is unexplained (possible factor tilt). Not yet decomposed into factor exposures.
 
-GMVP is a variance-minimization exercise, and the model has the highest ex-post GMVP variance of all five methods (9.88×10⁻⁵ vs 8.78 rolling, 8.88 mix, 8.93 persistence, 9.15 shrink — confirmed in `report.csv`). The Sharpe advantage therefore comes entirely from the return side, which a covariance forecast doesn't predict and GMVP doesn't optimize. The standard referee attack: "your covariance forecast produces the worst minimum-variance portfolio; the Sharpe gain is an unexplained return effect, possibly a factor tilt or luck." The paper currently buries this in a half-sentence ("higher realized variance and turnover").
+### 3. Equity curve and Sharpe estimator are now correctly constructed
 
-**Fix:** Confront it head-on. (a) Report ex-post variance with significance tests as a co-primary metric and acknowledge the model loses on it. (b) Investigate where the return comes from — factor exposures of the weight differences (market beta, size, low-vol tilt), or at least show the return gain is stable across subperiods. (c) Consider reframing: if your story is "regime-conditioning captures economically relevant structure," a mean-variance or risk-parity evaluation, or Diebold-Mariano tests on the matrix losses, may serve the claim better than GMVP alone.
+The evaluation now emits per-day GMVP returns (`run_backtest.py` → `results/<tag>/gmvp_daily_returns.parquet`, covariance path), and `scripts/analysis/core/build_equity_curves.py` builds both a tranched (all-anchor, overlap-corrected) and a non-overlapping daily curve plus a whole-sample annualized Sharpe (`equity_curve_summary.csv`).
 
-### 3. [CONFIRMED] The wealth curve double-counts overlapping holding windows (~4× inflation); the Sharpe metric is nonstandard
+This replaces two earlier artifacts:
+- **Wealth curves are no longer double-counted.** The prior curve compounded a 20-trading-day holding return once every 5 days (stride=5), compounding each period ~4×. Correctly stitched terminal wealth (all methods): Model **1.88**, Pers **1.82**, Mix **1.68**, Shrink **1.42**, Roll **1.41** — ranking preserved, model and persistence nearly tied. The old as-plotted 9.47 (≈36%/yr for a min-variance book over 7.3 yr) was the artifact; ~9.1%/yr is the honest figure.
+- **Sharpe is now a standard whole-sample daily Sharpe** on the tranched series, replacing the earlier mean-of-per-window-annualized-Sharpes (noisy, never defined).
 
-**Audit result (2026-07, verified against `backtest.csv` + code):**
-- `hold_period_portfolio_stats` returns `gmvp_cumret = prod(1 + rp) - 1` over the **full 20-trading-day holding window**.
-- `plot_equity_curves` (in `scripts/analysis/core/visualize_backtest_results.py`) builds the curve as `np.cumprod(1 + gmvp_cumret)` over evaluation rows.
-- Evaluation rows are spaced **5 trading days apart** (stride=5), but each `gmvp_cumret` spans 20 trading days → every period is compounded ~4×.
-- Reproduced the paper number exactly: as-plotted terminal wealth = **9.474** (paper: 9.47), implying **36%/yr CAGR** for a min-variance portfolio over 7.3 years — implausible.
-- Honest non-overlapping stitch (anchors ≥20 trading days apart): terminal wealth **1.88** (model), **9.1%/yr CAGR** — plausible.
+### 4. The GFC is now inside the portfolio evaluation
 
-Corrected terminal wealth, all methods: Model 9.47→**1.88**, Pers 8.42→**1.82**, Mix 6.77→**1.68**, Shrink 4.40→**1.42**, Roll 4.32→**1.41**. Ranking survives, but every terminal-wealth figure in the paper is a ~4× artifact and Figure 4's shape is wrong. Note the honest curve makes model and persistence nearly tied (1.88 vs 1.82), reinforcing issue 5.
+Portfolio returns are computed over observed names each day with weights renormalized over the tradable universe (`gmvp_daily_returns_renorm` in `backtests.py`, wired into `hold_period_portfolio_stats` and the daily artifact). Previously a single missing (pre-IPO) name NaN'd the whole day via `fut @ w`, dropping all of 2008–2013 — so the GFC the abstract advertises contributed zero portfolio evidence.
 
-Separately, `gmvp_sharpe` is a mean of per-window annualized Sharpes (each from 20 daily obs, ×√252) averaged across dates — noisy, nonstandard, never defined in the paper. This averaging is *not* affected by the compounding bug, but still needs replacing with a proper strategy-level Sharpe.
+- Valid GMVP dates: **369 → 662** (263 pre-2014 dates recovered, **62 in the 2008–2009 GFC**).
+- The renormalization is identity on fully-observed windows: on the 369 previously-valid dates, `model_fro` and `regime_assigned` are byte-identical and 356/369 GMVP values match to ~1e-15; only 13 partial-universe windows legitimately change. This introduces a disclosed time-varying universe.
+- Consequence: including the GFC and removing the double-count compresses the field. Even under the paper's own per-window metric, the model's lead over persistence collapses from 1.57-vs-1.00 to 1.57-vs-1.53; on the honest daily tranched Sharpe the field sits at 0.63–0.71 (tag `regime_cov_renorm`), nothing like the paper's headline gap.
 
-**Fix:** (a) Rebuild the equity curve from a properly stitched non-overlapping (or 1/H-tranched overlapping) return series — ideally re-instrument the backtest to emit daily portfolio returns so a true daily curve and whole-sample Sharpe can be computed. (b) Define the Sharpe estimator explicitly in the paper and report the whole-sample annualized Sharpe. (c) Correct every terminal-wealth number and redraw Figure 4 with its construction stated in the caption.
+### 5. The novel components are inert or small and untested
 
-**Fix status (code landed, pending batched re-run with issue 1):**
-- `run_backtest.py` now emits `results/<tag>/gmvp_daily_returns.parquet` — per-day GMVP returns per method, tagged by anchor + calendar date (covariance path only).
-- `scripts/analysis/core/build_equity_curves.py` builds both a **tranched** (all-anchor, overlap-corrected) and a **non-overlapping** daily curve, plus whole-sample annualized Sharpe + terminal wealth (`equity_curve_summary.csv`). Falls back to a non-overlapping stitch of `*_gmvp_cumret` until the re-run produces the per-day artifact.
-- `plot_equity_curves` (viz pipeline) rewritten to stitch non-overlapping windows instead of `cumprod` over overlapping rows.
-- Honest numbers from the fallback (existing data): terminal wealth model **1.88**, pers **1.82**, mix 1.68, shrink 1.42, roll 1.41; whole-sample (window-level) Sharpe model **0.58** vs pers **0.55** — model and persistence nearly tied, consistent with the block bootstrap.
-- Remaining: re-run backtest to produce the per-day artifact + true daily tranched Sharpe, then update Figure 4 and every terminal-wealth/Sharpe number in the paper (batched with the issue-1 tuning-split re-run).
+- **The Markov filter is empirically inert** on this data: raw vs filtered regime posteriors differ by < 10⁻⁸. It is an architectural option, not a working contribution here.
+- **The regime layer's measured delta** (K=1→K=4) is ~8% Sharpe (0.996→1.079), on the tuning sample, at a non-final config, with no significance test. The block-bootstrap test of K=4 vs K=1 at the final config on held-out data — the single experiment that directly tests the contribution — is not yet run.
+- **Regime persistence is near-chance**: diagonal persistence is 28–33% vs a 25% chance level, so "persistent and interpretable market regimes" overstates what the data shows.
 
-### 4. Silent sample selection: 293 of 662 dates dropped, and the GFC never enters the portfolio results
+### 6. Against real baselines the model does not dominate on any axis
 
-The 369-date restriction isn't a minor detail. In `hold_period_portfolio_stats`, a single missing asset return makes the whole day's portfolio return NaN, and dates where all 20 holding days are NaN are dropped. That's why nothing before March 2014 survives — which means the 2008 crisis, which the abstract advertises as part of the test ("includes GFC"), contributes zero portfolio evidence. The paper attributes the flat pre-2014 curve to "expanding-window warm-up," which is not the actual mechanism.
-
-**Fix:** Disclose the true mechanism, and preferably fix it: compute portfolio returns over the observed-asset subset each day (renormalize weights over non-missing assets), which should recover most of 2008–2014 and let you actually test the GFC claim. If the GFC results are bad, report them — the crisis analysis section already sets up that narrative honestly.
-
-**Fix status (DONE + validated, scai4 re-run to tag `regime_cov_renorm`):**
-- Confirmed: all 293 dropped GMVP dates were NaN purely from `fut @ w` propagation; the *entire* 2008–2013 span (263 dates) had valid matrix losses but zero valid GMVP. Not a data limitation — the bug.
-- Fixed via `gmvp_daily_returns_renorm` (in `backtests.py`, wired into `hold_period_portfolio_stats` and the daily-artifact instrumentation): each day, invest over observed names and renormalize weights (policy chosen: renormalize over tradable names; introduces a disclosed time-varying universe).
-- Validated: valid GMVP dates **369 → 662** (263 pre-2014 recovered, **62 in the 2008–2009 GFC**). On the 369 previously-valid dates, `model_fro` and `regime_assigned` are byte-identical and 356/369 GMVP values are identical to ~1e-15 (renorm = identity on fully-observed windows); only 13 partial-universe windows legitimately change. The ΔSharpe=41 outlier is the noisy per-window metric on a ~0-variance window, not a bug.
-
-**Headline consequence (couples issues 2, 3, 5).** On the honest whole-sample **daily tranched Sharpe** (all anchors, no double-count, GFC included): Model **0.68**, Pers **0.71**, Mix 0.69, Roll 0.64, Shrink 0.63 — **persistence edges out the model; the field compresses to 0.63–0.71**, nothing like the paper's 1.57-vs-1.00. Even under the paper's own per-window metric, including the GFC collapses the model's lead over persistence from 1.57-vs-1.00 to 1.57-vs-1.53. Terminal wealth still ranks model top (3.67 vs pers 3.45) but that reflects the model taking more variance. Net: the paper's central "substantial improvement in risk-adjusted performance" claim does not survive honest accounting on the current (still in-sample) config. Re-tuning (issue 1) is next; this is the pre-tuning honest baseline.
-
-### 5. The novel component's contribution is small, measured in-sample, and never tested for significance
-
-The paper is commendably honest that (a) the Markov filter is empirically inert (differences < 10⁻⁸), and (b) the regime layer itself — the delta over Cartea et al.-style similarity-only — is the K=1→K=4 gain of ~8% Sharpe (0.996 → 1.079), on the tuning sample, at a non-final configuration, with no significance test. Meanwhile the block bootstrap shows the model is not distinguishable from persistence. So the referee's summary is: "the novel components are either inert (filtering) or worth an untested 8% in-sample (regimes), and the full model doesn't significantly beat the strongest baseline." That's the crux of the accept/reject decision.
-
-**Fix:**
-- Run the block bootstrap on the K=4 vs K=1 paired difference at the final configuration on held-out data. This is the single most important missing experiment — it directly tests your contribution. If it's significant, lead with it.
-- Rewrite the abstract and intro to stop selling Markov filtering ("Markov transition smoothing, yielding a regime-conditioned mixture-of-local-experts estimator") as a contribution — Section 6.4 admits it does nothing on this data. Sell it as an architectural option, or drop it from the pitch.
-- The abstract claims "persistent and interpretable market regimes"; Section 6.4 says diagonal persistence is 28–33% vs a 25% chance level. Fix the abstract.
-
-### 6. Baselines are too weak for ICAIF
-
-The "shrinkage" baseline is a fixed γ=0.3 blend toward the diagonal — a strawman relative to the Ledoit-Wolf estimators you cite (LW has an optimal, data-driven intensity and a market-factor target). There is no EWMA/RiskMetrics, no DCC(-NL), no factor-model covariance, no 1/N portfolio, and the volatility section has no HAR — the universal realized-vol baseline, which you also cite. Reviewers at a finance-AI venue will check exactly this list.
-
-**Fix (minimum viable set):** actual Ledoit-Wolf (sklearn's `LedoitWolf` is a drop-in), EWMA covariance (λ=0.94), and HAR for the volatility section. DCC-NL if time permits. If the model only beats weak baselines, better to know now than from the reviews.
-
-**Fix status (DONE for covariance baselines — the result is unflattering, 2026-07-10).** Added `baseline_ledoit_wolf`, `baseline_oas`, `baseline_ewma_cov` to `backtests.py` and evaluated them faithfully on the same OOS harness/anchors (`scripts/analysis/core/eval_extra_baselines.py`, tag `oos_final`, held-out 2017–2021):
+Real Ledoit-Wolf, OAS, and EWMA are now implemented (`baseline_ledoit_wolf`/`baseline_oas`/`baseline_ewma_cov` in `backtests.py`) and evaluated faithfully on the same OOS harness/anchors (`scripts/analysis/core/eval_extra_baselines.py`, tag `oos_final`, held-out 2017–2021). The prior "shrinkage" baseline was a fixed γ=0.3 blend toward the diagonal — a strawman relative to the Ledoit-Wolf estimator the paper cites.
 
 | Method | GMVP Sharpe | Stein | KL | Frobenius |
 |---|---|---|---|---|
@@ -97,75 +62,52 @@ The "shrinkage" baseline is a fixed γ=0.3 blend toward the diagonal — a straw
 | OAS | 0.554 | 869 | 434 | 0.0265 |
 | Shrink γ=.3 | 0.546 | 845 | 423 | 0.0246 |
 
-**The real baselines remove the statistical-forecasting salvage.** On Stein/KL, real Ledoit-Wolf and OAS *beat* the model (LW Stein 839 vs model 1095) — the model's apparent Stein/KL edge existed only against the weak rolling/persistence baselines and the γ=0.3 strawman. The model leads only on Frobenius (0.0252, marginal). On GMVP Sharpe held-out, EWMA(0.94) (0.632) ≈ persistence, both above the model (0.582); all pairwise model-vs-baseline differences remain statistical ties (block bootstrap p=0.70–0.78). Net: against properly constructed estimators the model does **not** dominate on statistical accuracy *or* portfolio performance — it is on par (tie on GMVP, ~LW-family on matrix losses, slightly worse on Stein/KL, slightly better on Frobenius). The honest contribution is a modular regime-aware framework that *matches* standard estimators with added regime interpretability — not a performance win.
+On Stein/KL, real Ledoit-Wolf and OAS **beat** the model (LW Stein 839 vs model 1095) — the model's apparent Stein/KL edge existed only against rolling/persistence and the γ=0.3 strawman. The model leads only on Frobenius, marginally. On GMVP Sharpe, EWMA(0.94)≈persistence, both above the model, and all pairwise differences are statistical ties (block bootstrap p=0.70–0.78). Against properly constructed estimators the model is on par — tie on GMVP, ~LW-family on matrix losses, slightly worse on Stein/KL, slightly better on Frobenius.
 
-**Volatility target + HAR (DONE, 2026-07-10; the last salvage, also unfavorable).** Ran the vol backtest (tag `vol_oos`) and added a faithful pooled walk-forward HAR (Corsi 2009) baseline (`scripts/analysis/core/eval_vol_har.py`; refit every 20d, no look-ahead, harness target + `eval_vol_metrics`). Held-out 2017–2021 vol MSE / R²: **HAR 0.176 / −0.026** (best) vs pers 0.270/−0.463, roll 0.331/−0.383, **model 0.334 / −0.241**, shrink 0.350/−0.302. HAR nearly halves the model's MSE and is the only method with R² near zero; the **model's held-out vol R² is negative** (worse than the mean). The paper's vol claim (MSE 0.233, R² 0.16) is in-sample only; out-of-sample HAR dominates and the model's vol edge disappears. **So neither the covariance nor the volatility target gives the model a convincing OOS win over its own cited baselines.** This strongly reinforces the "matches at best, does not beat proper baselines" conclusion — a decision for the advisor, not more code.
-
----
-
-## Part 2: Serious but straightforward issues
-
-7. **Survivorship/look-ahead in universe construction.** Selection requires ≥85% availability in 2015–2021 and hand-picks mega-caps known ex post (NVDA!) for a backtest starting 2008. Cross-method comparisons on the shared universe remain internally fair, but absolute performance is inflated. Disclose this prominently in Section 4.1, not implicitly.
-
-8. **Statistical reporting errors in Table 6.** Persistence Sharpe p=0.052 is starred `*` under a stated threshold of p<0.05 (it doesn't qualify), and Roll Frobenius p=0.019 is starred `**` (threshold p<0.01). Reviewers catch these and it damages trust in everything else. Also the sign convention flips meaning within one table (+ is good for Sharpe, bad for Frobenius) — restructure so positive always favors the model, or split columns.
-
-9. **Number provenance.** Sharpes of 0.996/1.079 (K-ablation), 1.943 (Phase 2), 1.573 (full backtest), 1.815 (normal periods) appear without a consistent sample/config label; the K-ablation numbers use a different base config than the Phase 2 winner, on an unstated sample. Add a single "which sample, which config" table, or footnote every number. (`CURRENT_STATE.md` says 1.041, which matches none of them — make sure the repo and paper agree before the code link goes live.)
-
-10. **Stability-enhancement tuning.** γ=0.12 and λ=0.08 are described as "tuned to balance…" and "selected to minimize realized GMVP variance" — on which sample? If on the evaluation sample, that's more leakage; state it and fold it into the tuning-window fix (issue 1). Same for the mixture weights: "fixed a priori" is asserted, but a Sharpe-variance sweep on the same data is described two sentences later; a reviewer will not read that as a priori.
-
-11. **Near-chance regime persistence is mechanically suspicious, not just a limitation.** Consecutive anchors share 47–49 of 50 window days, so their embeddings are nearly identical; hard assignments flipping at near-chance rates suggests cluster instability (FCM memberships hovering near the simplex center, or label noise), not fast regime switching. Investigate before a reviewer does: check membership entropy and whether hard assignments flip between near-tied memberships. Also report seed sensitivity for FCM/GMM — the clustering is stochastic and no variability across seeds is reported anywhere.
-
-12. **GMVP is long-short with unreported leverage.** Gross exposure of unconstrained Σ⁻¹1 weights can be large and time-varying, which confounds both Sharpe and turnover comparisons across methods. Report gross leverage per method, and consider adding the long-only variant (already in your codebase) as a robustness table.
+**Volatility target + HAR** (tag `vol_oos`; faithful pooled walk-forward HAR / Corsi 2009, `scripts/analysis/core/eval_vol_har.py`, refit every 20d, no look-ahead). Held-out 2017–2021 vol MSE / R²: **HAR 0.176 / −0.026** (best) vs pers 0.270/−0.463, roll 0.331/−0.383, **model 0.334 / −0.241**, shrink 0.350/−0.302. HAR nearly halves the model's MSE and is the only method with R² near zero; the model's held-out vol R² is negative (worse than the mean). The paper's vol claim (MSE 0.233, R² 0.16) is in-sample only. Neither the covariance nor the volatility target gives the model a convincing OOS win over its own cited baselines.
 
 ---
 
-## Part 3: Submission mechanics (do these regardless)
+## Part 2: Still open in the write-up
 
-13. **Format:** 19 pages, single-column article class, with "Supervisor: Mihai Cucuringu" on the title page. ICAIF uses the ACM sigconf two-column template with a hard page limit (full papers have been 8 pages + references; check this year's CFP). You need to cut roughly half the content — Section 4 (data QC) and the ablation narrative are the natural compression targets (move detail to an appendix/arXiv version).
+The empirics above are settled in code and results. These items are text/analysis work the paper still needs, and describe the present gap between the repo and the draft.
 
-14. **Anonymization:** ICAIF is double-blind. The title page has names, emails, supervisor, and footnote 1 links your personal GitHub. Use an anonymized repo (e.g., anonymous.4open.science) and strip the acknowledgment. Note also that your supervisor is a co-author of Cartea et al. (2023), your primary reference — phrase the relationship neutrally ("builds on," not insider framing) so the paper doesn't de-anonymize itself.
+**Paper-text corrections (mostly no new code):**
 
-15. **Citation hygiene:** Cartea et al. (2023) is cited as "Working paper / preprint" with the title repeated in the note — get the SSRN number or the published version. Add missing related work a regime-focused reviewer will expect: Pelletier (2006) regime-switching correlations, jump-model regime detection (Nystrup et al.), and recent ICAIF regime-detection papers — citing the venue's own literature matters for fit.
+7. **Survivorship/look-ahead disclosure.** Universe selection requires ≥85% availability in 2015–2021 and includes mega-caps known ex post (NVDA) for a backtest starting 2008. Cross-method comparisons on the shared universe stay internally fair, but absolute performance is inflated — needs a prominent disclosure in Section 4.1, not an implicit one.
+8. **Table 6 statistics.** Persistence Sharpe p=0.052 is starred `*` under a p<0.05 threshold (doesn't qualify); Roll Frobenius p=0.019 is starred `**` under p<0.01. Also the sign convention flips meaning within one table (+ good for Sharpe, bad for Frobenius). Fix stars; restructure so positive always favors the model or split columns.
+9. **Number provenance.** Sharpes of 0.996/1.079 (K-ablation), 1.943 (Phase 2), 1.573 (full backtest), 1.815 (normal periods) appear without a consistent sample/config label; `CURRENT_STATE.md` says 1.041, which matches none of them. Add a single "which sample, which config" table (and reconcile repo vs paper before the code link goes live). All of these are now superseded by the honest OOS numbers in Part 1.
+10. **Stability-enhancement tuning.** γ=0.12 and λ=0.08 ("tuned to balance…", "selected to minimize realized GMVP variance") need an explicit statement of which sample they were tuned on; if the evaluation sample, that is leakage and must be folded into the OOS split. Same for the mixture weights, asserted "fixed a priori" two sentences before a Sharpe-variance sweep on the same data.
+11. **Regime-persistence diagnostic (small code task).** Consecutive anchors share 47–49 of 50 window days, so their embeddings are nearly identical; near-chance hard-assignment flipping suggests cluster instability (FCM memberships near the simplex center) rather than fast regime switching. Check membership entropy and whether flips occur between near-tied memberships, and report FCM/GMM seed sensitivity (currently no cross-seed variability is reported anywhere).
+12. **Leverage reporting.** GMVP here is long-short with unreported, time-varying gross exposure of Σ⁻¹1, which confounds Sharpe and turnover across methods. Report gross leverage per method; consider adding the long-only variant (already in the codebase) as a robustness table.
 
----
+**Submission mechanics (do regardless of framing):**
 
-## Priority order
-
-1. **Audit the equity curve for overlap double-counting** (issue 3) — if Figure 4 is inflated, everything downstream changes.
-2. **Fix the tuning/evaluation split** (issue 1) — re-tune on pre-2015 or 2015–2018; this rescues the paper's validity.
-3. **Block-bootstrap the K=4 vs K=1 difference at the final config** (issue 5) — this is the test of your actual contribution.
-4. **Add real baselines: Ledoit-Wolf, EWMA, HAR** (issue 6).
-5. **Fix the NaN-driven date dropping so the GFC enters the portfolio evaluation** (issue 4).
-6. Rewrite abstract/claims (filtering inert, regimes not persistent, variance not improved), fix Table 6 stars, add number-provenance labels.
-7. Convert to ACM template, cut to page limit, anonymize.
-
-The honest self-assessments already in the paper (block bootstrap, inert filter, the "honest magnitude" paragraph) are genuinely to your credit and unusual — keep that tone. The work needed is not more honesty, it's restructuring the experiments so the headline numbers are the honest ones.
+13. **Format.** The draft is 19 pages, single-column article class, with "Supervisor: Mihai Cucuringu" on the title page. ICAIF uses the ACM sigconf two-column template with a hard page limit (recent full papers ~8 pages + references; confirm this year's CFP). Needs ~half the content cut — Section 4 (data QC) and the ablation narrative are the natural compression targets (move detail to an appendix/arXiv version).
+14. **Anonymization.** ICAIF is double-blind. The title page carries names, emails, supervisor, and footnote 1 links a personal GitHub. Use an anonymized repo (e.g. anonymous.4open.science), strip the acknowledgment, and phrase the Cartea et al. (2023) relationship neutrally ("builds on") since the supervisor is a co-author and the paper could otherwise de-anonymize itself.
+15. **Citation hygiene.** Cartea et al. (2023) is cited as "Working paper / preprint" with the title repeated — get the SSRN number or published version. Add related work a regime-focused reviewer expects: Pelletier (2006) regime-switching correlations, jump-model regime detection (Nystrup et al.), and recent ICAIF regime-detection papers.
 
 ---
 
-## Part 4: On "add more signals/complexity" proposals (macro, cross-asset, learned metrics, fancier regimes)
+## Part 3: Scope — directions not pursued this cycle
 
-**Headline:** These are performance-engineering ideas, and the paper will not be rejected for insufficient performance — it will be rejected for the validity problems in Part 1. Adding features/learned components on top of an evaluation that already leaks produces a *bigger in-sample number that reviewers trust less*. Validity first; signals second. Do not spend the runway to the deadline on model complexity.
-
-**Triage (ICAIF lens):**
+Proposals to add signals/complexity (macro, cross-asset, learned metrics, fancier regimes) are performance-engineering ideas. The current blocker is not insufficient performance — it is that the model already matches baselines on a now-clean evaluation; adding degrees of freedom on top would raise an in-sample number reviewers trust less. Current position on each:
 
 | Idea | Fixes a reviewer objection? | Risk | Verdict |
 |---|---|---|---|
-| Macro (FRED-MD), lagged | Partially — answers "regimes are endogenous" | Scope blow-up; doesn't touch leakage | v2 / camera-ready |
+| Macro (FRED-MD), lagged | Partially — answers "regimes are endogenous" | Scope blow-up | v2 / camera-ready |
 | Cross-asset (VIX, bonds, credit) | Same; economic interpretation | **Look-ahead/circularity** if not strictly lagged | Strongest idea, still v2 |
-| Learned / Mahalanobis metric | No | More params → amplifies "just overfitting?" attack | Skip for this submission |
+| Learned / Mahalanobis metric | No | More params → amplifies overfitting attack | Skip this submission |
 | Temporal / trajectory matching | No (ties to Path Shadowing) | Research-level; own validation | v2 |
 | Adaptive kNN | Marginally (crisis) | Another threshold to tune | Cheap, low priority |
 | Novelty detection / confidence fallback | Marginally | Already partly in codebase (blend-to-pers) | Low priority |
-| Fancier regime models (VAE, time-varying A) | No — conflicts with own finding | Filter already inert; a rewrite | Skip / premature |
+| Fancier regime models (VAE, time-varying A) | No — conflicts with own finding | Filter already inert | Skip / premature |
 | Feature eng. (skew, kurt, vol-of-vol, dispersion) | No | Dimensionality (kNN curse) | Marginal |
-| Learned embeddings (autoencoder, contrastive) | No | Largest overfitting surface; small N | Skip for this submission |
+| Learned embeddings (autoencoder, contrastive) | No | Largest overfitting surface; small N | Skip this submission |
 
-**Key ICAIF-specific caveats:**
-1. **Amplifies the #1 problem.** With ~89% of GMVP evidence inside the tuning window, every added feature raises the headline and lowers its credibility. Cannot add degrees of freedom until the evaluation is genuinely OOS. This ordering is non-negotiable.
-2. **Look-ahead in the "high-impact" features.** VIX / realized skew-kurt / vol-of-vol are contemporaneous risk measures; legitimate only if strictly lagged. Adding VIX also risks dissolving the novelty into "VIX did the work" — which then *requires* a VIX-conditioned baseline to rule out.
-3. **Regime upgrades contradict the paper's own findings.** The filter is already inert and persistence is near-chance. The right move on regimes is *diagnostic* (is near-chance persistence real, or clustering instability from 47–49/50 overlapping window days? — see Part 2 issue 11), not a bigger architecture.
-4. **Dimensionality self-contradiction.** Can't warn about the kNN curse of dimensionality and then concatenate VIX + bonds + credit + macro + skew + kurt + vol-of-vol. Each block must earn its place or it degrades neighbor quality.
-5. **Where it's genuinely right — but as a different paper.** "Regimes are endogenous (market-return-only)" is a legitimate limitation worth adding to the Discussion now. Macro/cross-asset conditioning (regime-level `P(s_t=k | z_t, M_t)`) is the correct spine for a *v2*, with its own OOS evaluation — not a bolt-on. Frame the current endogenous regimes as a deliberate clean baseline and name macro conditioning as the natural extension: get credit for the idea without owing the experiments.
-
-**What to actually do now:** the Part 3 → Priority order, not this list. The only overlaps worth doing for this submission are (a) framing endogenous regimes as an honest limitation, and (b) possibly a VIX-conditioned *baseline to beat* (not a feature to absorb).
+Current position:
+1. Any added feature raises the headline and lowers its credibility until there is a genuine OOS win to build on — which there currently is not.
+2. The "high-impact" cross-asset features (VIX, realized skew-kurt, vol-of-vol) are contemporaneous risk measures, legitimate only if strictly lagged; VIX in particular risks dissolving the novelty into "VIX did the work" and would then require a VIX-conditioned baseline to rule out.
+3. Regime upgrades contradict the project's own findings (filter inert, persistence near-chance); the right move on regimes is diagnostic (issue 11), not a bigger architecture.
+4. Can't warn about the kNN curse of dimensionality and then concatenate VIX + bonds + credit + macro + skew + kurt.
+5. "Regimes are endogenous (market-return-only)" is a legitimate limitation to state now; macro/cross-asset regime conditioning (`P(s_t=k | z_t, M_t)`) is the correct spine for a v2 with its own OOS evaluation, not a bolt-on.
