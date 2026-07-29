@@ -4,6 +4,7 @@ Output: motivation_comparison_vertical.png (6×11 in, 300 dpi).
 """
 
 import os
+from pathlib import Path
 
 import matplotlib
 
@@ -16,11 +17,25 @@ from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch
 ROLL_COLORS = ["#E8F4F8", "#D4E9F2", "#C0DEEC", "#ACD3E6", "#84BCE0"]
 RED_NOW = "#FF0000"
 REGIME = {
-    0: "#90EE90",  # Calm
-    1: "#87CEEB",  # Moderate
-    2: "#FFD700",  # Normal
-    3: "#FF6B6B",  # Crisis
+    0: "#90EE90",
+    1: "#87CEEB",
+    2: "#FFD700",
+    3: "#FF6B6B",
 }
+
+
+def _semantic_regime_label(regime_id: int) -> str:
+    """Label for plots; prefers results/.../regime_name_map.json when present."""
+    try:
+        from similarity_forecast.regime_labels import load_regime_name_map
+
+        jp = Path(__file__).resolve().parents[2] / "results" / "regime_covariance" / "regime_name_map.json"
+        if jp.exists():
+            rmap = load_regime_name_map(jp)
+            return rmap.get(regime_id, f"Regime {regime_id}")
+    except Exception:
+        pass
+    return f"Regime {regime_id}"
 
 
 def _linspace(a, b, n):
@@ -206,10 +221,11 @@ def create_vertical_comparison():
         )
     )
     ax2.add_patch(Circle((x_now2, ty), 0.22, facecolor=RED_NOW, edgecolor="white", linewidth=1.5))
+    _rlab = _semantic_regime_label(3)
     ax2.text(
         x_now2,
         ty + 0.72,
-        "t (now), Regime 3",
+        f"t (now), {_rlab}",
         ha="center",
         fontsize=10,
         fontweight="bold",
@@ -219,7 +235,7 @@ def create_vertical_comparison():
     ax2.text(
         5,
         ty - 0.95,
-        "Retrieved: similar Regime 3 periods (circled)",
+        f"Retrieved: similar {_rlab} periods (circled)",
         ha="center",
         fontsize=9,
         style="italic",

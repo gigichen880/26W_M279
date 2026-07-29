@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from scripts.analysis.regime.regime_label_utils import get_regime_name_map_for_backtest
 from scripts.analysis.utils.paths import resolve_backtest_path, resolve_figs_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -57,17 +58,25 @@ def identify_crisis_periods() -> list[dict]:
     ]
 
 
-def plot_regime_timeline(df: pd.DataFrame, K: int = 4, save_path: str | Path | None = None) -> tuple:
+def plot_regime_timeline(
+    df: pd.DataFrame,
+    K: int = 4,
+    save_path: str | Path | None = None,
+    regime_name_map: dict[int, str] | None = None,
+) -> tuple:
     if save_path is None:
         save_path = DEFAULT_OUTDIR / "regime_timeline.png"
     save_path = Path(save_path)
+    if regime_name_map is None:
+        regime_name_map = {k: f"Regime {k}" for k in range(K)}
 
     fig, ax = plt.subplots(figsize=(16, 6))
     colors = {0: "#E74C3C", 1: "#3498DB", 2: "#9B59B6", 3: "#95A5A6", 4: "#F39C12", 5: "#2ECC71"}
 
     for k in range(K):
         mask = df["regime_assigned"] == k
-        ax.scatter(df.loc[mask, "date"], df.loc[mask, "regime_assigned"], c=colors.get(k, f"C{k}"), s=20, alpha=0.7, label=f"Regime {k}")
+        lab = regime_name_map.get(k, f"Regime {k}")
+        ax.scatter(df.loc[mask, "date"], df.loc[mask, "regime_assigned"], c=colors.get(k, f"C{k}"), s=20, alpha=0.7, label=lab)
 
     for period in identify_crisis_periods():
         start = pd.to_datetime(period["start"])
@@ -80,9 +89,9 @@ def plot_regime_timeline(df: pd.DataFrame, K: int = 4, save_path: str | Path | N
 
     ax.set_xlabel("Date", fontsize=12)
     ax.set_ylabel("Regime", fontsize=12)
-    ax.set_title("GMM Regime Assignments Over Time (2012-2021)", fontsize=14, fontweight="bold")
+    ax.set_title("Regime Assignments Over Time", fontsize=14, fontweight="bold")
     ax.set_yticks(range(K))
-    ax.set_yticklabels([f"Regime {k}" for k in range(K)])
+    ax.set_yticklabels([regime_name_map.get(k, f"Regime {k}") for k in range(K)])
     ax.grid(True, alpha=0.3, axis="x")
     ax.legend(loc="upper right", ncol=min(K, 5), fontsize=9)
 
@@ -94,15 +103,23 @@ def plot_regime_timeline(df: pd.DataFrame, K: int = 4, save_path: str | Path | N
     return fig, ax
 
 
-def plot_regime_probabilities_stacked(df: pd.DataFrame, K: int = 4, save_path: str | Path | None = None) -> tuple:
+def plot_regime_probabilities_stacked(
+    df: pd.DataFrame,
+    K: int = 4,
+    save_path: str | Path | None = None,
+    regime_name_map: dict[int, str] | None = None,
+) -> tuple:
     if save_path is None:
         save_path = DEFAULT_OUTDIR / "regime_probs_stacked.png"
     save_path = Path(save_path)
+    if regime_name_map is None:
+        regime_name_map = {k: f"Regime {k}" for k in range(K)}
     fig, ax = plt.subplots(figsize=(16, 6))
     prob_cols = [f"regime_prob_{k}" for k in range(K)]
     regime_probs = df[prob_cols].values.T
     colors = ["#E74C3C", "#3498DB", "#9B59B6", "#95A5A6", "#F39C12", "#2ECC71"][:K]
-    ax.stackplot(df["date"], *regime_probs, labels=[f"Regime {k}" for k in range(K)], colors=colors, alpha=0.7)
+    labs = [regime_name_map.get(k, f"Regime {k}") for k in range(K)]
+    ax.stackplot(df["date"], *regime_probs, labels=labs, colors=colors, alpha=0.7)
     for period in identify_crisis_periods():
         start = pd.to_datetime(period["start"])
         end = pd.to_datetime(period["end"])
@@ -122,24 +139,32 @@ def plot_regime_probabilities_stacked(df: pd.DataFrame, K: int = 4, save_path: s
     return fig, ax
 
 
-def plot_regime_filtered_vs_raw(df: pd.DataFrame, K: int = 4, save_path: str | Path | None = None) -> tuple:
+def plot_regime_filtered_vs_raw(
+    df: pd.DataFrame,
+    K: int = 4,
+    save_path: str | Path | None = None,
+    regime_name_map: dict[int, str] | None = None,
+) -> tuple:
     if save_path is None:
         save_path = DEFAULT_OUTDIR / "regime_filtering_effect.png"
     save_path = Path(save_path)
+    if regime_name_map is None:
+        regime_name_map = {k: f"Regime {k}" for k in range(K)}
     fig, axes = plt.subplots(K, 1, figsize=(16, 10), sharex=True)
     for k in range(K):
         ax = axes[k]
         raw_col = f"regime_raw_{k}"
         prob_col = f"regime_prob_{k}"
+        rlab = regime_name_map.get(k, f"Regime {k}")
         if raw_col in df.columns:
-            ax.plot(df["date"], df[raw_col], label="Raw GMM π(k)", alpha=0.4, linewidth=1, color="lightgray")
+            ax.plot(df["date"], df[raw_col], label="Raw π(k)", alpha=0.4, linewidth=1, color="lightgray")
         ax.plot(df["date"], df[prob_col], label="Filtered α(k)", linewidth=2, color=f"C{k}")
         for period in identify_crisis_periods():
             start = pd.to_datetime(period["start"])
             end = pd.to_datetime(period["end"])
             if start <= df["date"].max() and end >= df["date"].min():
                 ax.axvspan(start, end, alpha=0.1, color="gray", zorder=0)
-        ax.set_ylabel(f"Regime {k}\nProbability", fontsize=10)
+        ax.set_ylabel(f"{rlab}\nProbability", fontsize=10)
         ax.set_ylim([0, 1])
         ax.legend(loc="upper right", fontsize=8)
         ax.grid(True, alpha=0.3)
@@ -185,10 +210,11 @@ def main() -> None:
         print("Re-run: python run_backtest.py --config configs/regime_covariance.yaml (or configs/regime_volatility.yaml)")
         return
 
-    plot_regime_timeline(df, K=K, save_path=outdir / "regime_timeline.png")
-    plot_regime_probabilities_stacked(df, K=K, save_path=outdir / "regime_probs_stacked.png")
+    rmap = get_regime_name_map_for_backtest(args.backtest, df=df)
+    plot_regime_timeline(df, K=K, save_path=outdir / "regime_timeline.png", regime_name_map=rmap)
+    plot_regime_probabilities_stacked(df, K=K, save_path=outdir / "regime_probs_stacked.png", regime_name_map=rmap)
     if "regime_raw_0" in df.columns:
-        plot_regime_filtered_vs_raw(df, K=K, save_path=outdir / "regime_filtering_effect.png")
+        plot_regime_filtered_vs_raw(df, K=K, save_path=outdir / "regime_filtering_effect.png", regime_name_map=rmap)
 
 
 if __name__ == "__main__":

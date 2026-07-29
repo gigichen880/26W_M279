@@ -11,6 +11,8 @@ import pandas as pd
 import seaborn as sns
 
 from scripts.analysis.utils.paths import resolve_backtest_path, resolve_figs_dir
+from scripts.analysis.regime.regime_label_utils import get_regime_name_map_for_backtest
+from similarity_forecast.regime_labels import infer_n_regimes, regime_names_in_id_order
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RESULTS_DIR = REPO_ROOT / "results"
@@ -33,7 +35,7 @@ def extract_transition_matrix(backtest_results_path=None):
         df = df.reset_index()
     df = df.sort_values("date").reset_index(drop=True)
     regimes = df["regime_assigned"].values
-    n_regimes = 4
+    n_regimes = infer_n_regimes(df)
     transition_counts = np.zeros((n_regimes, n_regimes))
     for i in range(len(regimes) - 1):
         a, b = regimes[i], regimes[i + 1]
@@ -54,8 +56,9 @@ def plot_transition_matrix(transition_matrix, regime_names=None, save_path=None)
         save_path = resolve_figs_dir("regime_covariance") / "transition_matrix_heatmap.png"
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
+    n = int(transition_matrix.shape[0])
     if regime_names is None:
-        regime_names = ["Regime 0", "Regime 1", "Regime 2", "Regime 3"]
+        regime_names = [f"Regime {k}" for k in range(n)]
     fig, ax = plt.subplots(figsize=(10, 8))
     sns.heatmap(
         transition_matrix,
@@ -75,7 +78,7 @@ def plot_transition_matrix(transition_matrix, regime_names=None, save_path=None)
     ax.set_title("Regime Transition Matrix (Markov Chain)", fontsize=14, fontweight="bold", pad=20)
     ax.set_xticklabels(regime_names, rotation=45, ha="right", fontsize=10)
     ax.set_yticklabels(regime_names, rotation=0, fontsize=10)
-    for i in range(4):
+    for i in range(n):
         rect = plt.Rectangle((i, i), 1, 1, fill=False, edgecolor="red", linewidth=2.5)
         ax.add_patch(rect)
     plt.tight_layout()
@@ -101,7 +104,10 @@ def main():
     figs_dir.mkdir(parents=True, exist_ok=True)
 
     transition_matrix = extract_transition_matrix(backtest_path)
-    regime_names = ["Calm Bull", "Moderate Bull", "Normal", "High Stress"]
+    df_bt = pd.read_parquet(backtest_path) if backtest_path.suffix == ".parquet" else pd.read_csv(backtest_path)
+    rmap = get_regime_name_map_for_backtest(backtest_path, df=df_bt)
+    K = infer_n_regimes(df_bt)
+    regime_names = regime_names_in_id_order(K, rmap)
     plot_transition_matrix(transition_matrix, regime_names, save_path=figs_dir / "transition_matrix_heatmap.png")
 
     df_matrix = pd.DataFrame(

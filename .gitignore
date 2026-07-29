@@ -62,6 +62,16 @@ results/eda/reports/*.parquet
 CLAUDE.md
 CURRENT_STATE.md
 
+# Local working notes / scratch (not for the shared repo)
+AGENTS.md
+PAPER_STATUS.md
+PAPER_ANALYSIS.md
+NUMBERS_TO_VERIFY.md
+REGIME_CHARACTERIZATION.md
+regime_labelling.md
+paper_figures/
+results/_archive_stale/
+
 # Overleaf agent (local development only)
 overleaf_agent/
 

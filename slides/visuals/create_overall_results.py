@@ -18,9 +18,9 @@ def create_overall_results_chart():
 
     # Data (from comprehensive_baseline_comparison.csv)
     methods = ["Roll", "Pers", "Shrink", "Mix", "Model"]
-    frobenius = [0.0258, 0.0280, 0.0231, 0.0230, 0.0238]
-    sharpe = [0.754, -0.940, 0.996, 1.015, 1.041]
-    turnover = [0.458, 0.756, 0.327, 0.398, 0.548]
+    frobenius = [0.0239, 0.0262, 0.0216, 0.0204, 0.0231]
+    sharpe = [1.036, 0.998, 1.125, 1.315, 1.449]
+    turnover = [0.231, 0.450, 0.174, 0.302, 0.635]
 
     # Colors
     colors = {

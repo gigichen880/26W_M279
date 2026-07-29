@@ -7,7 +7,9 @@ Run from repo root: python scripts/analysis/lag_analysis.py
 
 import pandas as pd
 
+from scripts.analysis.regime.regime_label_utils import get_regime_name_map_for_backtest
 from scripts.analysis.utils.paths import RESULTS_DIR, resolve_figs_dir
+from similarity_forecast.regime_labels import LABEL_HIGH_STRESS
 
 
 def _ensure_date_column(df: pd.DataFrame) -> pd.DataFrame:
@@ -31,6 +33,9 @@ def main():
     df_k4 = pd.read_parquet(p_k4)
     df_k1 = _ensure_date_column(df_k1)
     df_k4 = _ensure_date_column(df_k4)
+    rmap_k4 = get_regime_name_map_for_backtest(p_k4, df=df_k4)
+    stress_ids = [k for k, v in rmap_k4.items() if v == LABEL_HIGH_STRESS]
+    stress_regime_id = stress_ids[0] if stress_ids else 3
 
     # Crisis flag (same definition as baseline_k1_test)
     crisis_dates = [
@@ -48,7 +53,7 @@ def main():
     df_k1["is_crisis"] = df_k1["date"].apply(in_crisis)
     df_k4["is_crisis"] = df_k4["date"].apply(in_crisis)
 
-    # ----- Lag analysis: when does K=4 assign crisis regime (3)? -----
+    # ----- Lag analysis: when does K=4 assign the data-driven High Stress regime? -----
     crisis_periods = [
         ("2015-08-01", "2015-09-30", "China Selloff"),
         ("2018-10-01", "2018-12-31", "Q4 2018"),
@@ -57,7 +62,7 @@ def main():
 
     for start, end, label in crisis_periods:
         period = df_k4[(df_k4["date"].astype(str).str[:10] >= start) & (df_k4["date"].astype(str).str[:10] <= end)]
-        crisis_detected = period.loc[period["regime_assigned"] == 3, "date"].min()
+        crisis_detected = period.loc[period["regime_assigned"] == stress_regime_id, "date"].min()
         if pd.isna(crisis_detected):
             print(f"{label}: Crisis regime NEVER detected during period!")
         else:

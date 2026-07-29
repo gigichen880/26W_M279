@@ -244,10 +244,13 @@ def _case_study_neighbors(cfg_path: str, date_str: str, k_neighbors: Optional[in
         bt_df = bt_df.sort_values("date").reset_index(drop=True)
 
         if "regime_assigned" in bt_df.columns:
+            from scripts.analysis.regime.regime_label_utils import get_regime_name_map_for_backtest
+
             fig2, ax2 = plt.subplots(figsize=(10, 4))
 
             # base timeline
             regimes = bt_df["regime_assigned"].astype(int)
+            rmap = get_regime_name_map_for_backtest(backtest_path, df=bt_df)
             ax2.scatter(bt_df["date"], regimes, s=10, alpha=0.4, c="lightgray", label="All anchors")
 
             # overlay neighbors sized by weight
@@ -274,7 +277,9 @@ def _case_study_neighbors(cfg_path: str, date_str: str, k_neighbors: Optional[in
             ax2.axvline(anchor_date, color="black", linestyle="--", linewidth=1.0, label="Anchor date")
             ax2.set_xlabel("Date")
             ax2.set_ylabel("Regime")
-            ax2.set_yticks(sorted(regimes.unique()))
+            yu = sorted(regimes.dropna().unique().astype(int))
+            ax2.set_yticks(yu)
+            ax2.set_yticklabels([rmap.get(int(k), f"Regime {int(k)}") for k in yu])
             ax2.set_title(f"Neighbor dates on regime timeline (anchor {anchor_date.date()})")
             ax2.grid(alpha=0.3, axis="x")
             ax2.legend(loc="upper left", fontsize=8)

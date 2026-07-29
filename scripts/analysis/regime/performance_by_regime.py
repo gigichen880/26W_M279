@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from scripts.analysis.regime.regime_label_utils import get_regime_name_map_for_backtest
 from scripts.analysis.utils import resolve_backtest_path, resolve_figs_dir
 
 
@@ -41,6 +42,8 @@ def main() -> None:
     if "regime_assigned" not in df.columns:
         print("No regime_assigned column. Re-run backtest with regime saving.")
         return
+
+    rmap = get_regime_name_map_for_backtest(backtest_path, df=df)
 
     target = args.target
     if target == "auto":
@@ -93,6 +96,7 @@ def main() -> None:
             continue
         row = {
             "Regime": int(k),
+            "Regime_Label": rmap.get(int(k), f"Regime {k}"),
             "N_days": n_days,
             "Err_Model": float(err_model.loc[mask].mean()),
             "Err_Roll": float(err_roll.loc[mask].mean()),
@@ -121,6 +125,7 @@ def main() -> None:
         import matplotlib.pyplot as plt
 
         regimes = table["Regime"].astype(int)
+        regime_labs = [rmap.get(int(r), f"Regime {r}") for r in regimes]
         x = np.arange(len(regimes))
         w = 0.35
 
@@ -134,7 +139,7 @@ def main() -> None:
             ax0.set_ylabel(f"Mean {err_label}")
             ax0.set_xlabel("Regime")
             ax0.set_xticks(x)
-            ax0.set_xticklabels([f"Regime {r}" for r in regimes])
+            ax0.set_xticklabels(regime_labs)
             ax0.legend(loc="best")
             ax0.grid(True, alpha=0.3, axis="y")
 
@@ -146,7 +151,7 @@ def main() -> None:
             ax1.set_ylabel(ylabel)
             ax1.set_xlabel("Regime")
             ax1.set_xticks(x)
-            ax1.set_xticklabels([f"Regime {r}" for r in regimes])
+            ax1.set_xticklabels(regime_labs)
             ax1.legend(loc="best")
             ax1.grid(True, alpha=0.3, axis="y")
             if add_zero_line:
@@ -158,7 +163,7 @@ def main() -> None:
             ax2.set_ylabel(win_ylabel)
             ax2.set_xlabel("Regime")
             ax2.set_xticks(x)
-            ax2.set_xticklabels([f"Regime {r}" for r in regimes])
+            ax2.set_xticklabels(regime_labs)
             ax2.set_ylim(0, 100)
             ax2.legend(loc="best")
             ax2.grid(True, alpha=0.3, axis="y")
@@ -177,7 +182,7 @@ def main() -> None:
             ax0.set_ylabel(f"Mean {err_label}")
             ax0.set_xlabel("Regime")
             ax0.set_xticks(x)
-            ax0.set_xticklabels([f"Regime {r}" for r in regimes])
+            ax0.set_xticklabels(regime_labs)
             ax0.legend(loc="best")
             ax0.grid(True, alpha=0.3, axis="y")
 
@@ -186,7 +191,7 @@ def main() -> None:
             ax1.set_ylabel(f"Win % (model {err_label} < roll)")
             ax1.set_xlabel("Regime")
             ax1.set_xticks(x)
-            ax1.set_xticklabels([f"Regime {r}" for r in regimes])
+            ax1.set_xticklabels(regime_labs)
             ax1.set_ylim(0, 100)
             ax1.legend(loc="best")
             ax1.grid(True, alpha=0.3, axis="y")
@@ -204,7 +209,7 @@ def main() -> None:
             ax0.set_ylabel(f"Mean {err_label}")
             ax0.set_xlabel("Regime")
             ax0.set_xticks(x)
-            ax0.set_xticklabels([f"Regime {r}" for r in regimes])
+            ax0.set_xticklabels(regime_labs)
             ax0.legend(loc="best")
             ax0.grid(True, alpha=0.3, axis="y")
 
@@ -213,7 +218,7 @@ def main() -> None:
             ax1.set_ylabel("Mean GMVP Sharpe")
             ax1.set_xlabel("Regime")
             ax1.set_xticks(x)
-            ax1.set_xticklabels([f"Regime {r}" for r in regimes])
+            ax1.set_xticklabels(regime_labs)
             ax1.legend(loc="best")
             ax1.grid(True, alpha=0.3, axis="y")
             ax1.axhline(0, color="black", linewidth=0.5)
@@ -223,7 +228,7 @@ def main() -> None:
             ax2.set_ylabel(f"Win % (model {err_label} < roll)")
             ax2.set_xlabel("Regime")
             ax2.set_xticks(x)
-            ax2.set_xticklabels([f"Regime {r}" for r in regimes])
+            ax2.set_xticklabels(regime_labs)
             ax2.set_ylim(0, 100)
             ax2.legend(loc="best")
             ax2.grid(True, alpha=0.3, axis="y")

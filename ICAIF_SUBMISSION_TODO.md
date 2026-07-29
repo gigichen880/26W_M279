@@ -1,0 +1,127 @@
+# ICAIF 2026 Submission Plan — Devansh & Bree
+
+**Paper:** Regime-Aware Similarity-Based Covariance Forecasting
+**Deadline:** Sunday **Aug 2, AoE** (no rebuttal; notification Sept 27)
+**Internal deadline:** full draft to Mihai by **Friday Jul 31, night** so he can comment over the weekend
+
+**How we're working:**
+- **Wed–Thu:** repo work in two parallel tracks (below) — Devansh on Track A, Bree on Track B. The tracks touch different scripts, results folders, and figures, so we don't block each other.
+- **Friday:** prose written **together**, once every table and figure exists.
+- **Weekend:** Mihai's comments + submit.
+
+---
+
+## Agreed framing (from Jul 28 call with Mihai)
+
+Combine options A + B. The paper claims two things, and only these two:
+
+1. **An interpretable regime-aware forecasting framework that matches standard covariance estimators out-of-sample.** Not "beats" — matches. Parity is the honest result; interpretability is the value-add.
+2. **A statistical-vs-economic disconnect finding (headline):** our model wins the statistical matrix metric (Frobenius) while producing the *worst* minimum-variance portfolio; Ledoit-Wolf/OAS win Stein/KL but don't win the portfolio contest either. Metric choice materially changes the ranking of covariance forecasters.
+
+**Regime labels:** no more human-readable names ("Calm Bull", "High Stress", …). They become **Regimes 1–4**, each characterized by a multi-feature **signature** (Mihai's suggestion): realized vol, avg pairwise correlation, mean return, persistence, % of days. Descriptive stats, no narrative labels.
+
+---
+
+## Step 0 — Unblock Bree (Devansh, Wednesday morning, FIRST)
+
+- [ ] Commit + push the honest-results work so Bree can pull: `results/oos_final/`, `results/regime_cov_renorm/`, `results/figs_regime_similarity/`, `REGIME_CONDITIONAL_ANALYSIS.md`, `scripts/analysis/core/conditional_gmvp_analysis.py`, and other uncommitted analysis scripts (local commits `3f97bda`, `f8a37b6` are also unpushed)
+- [ ] Bree: clone repo, `pip install -r requirements.txt`, confirm the results CSVs open
+- [ ] `data/processed/returns_universe_100.parquet` is gitignored — Devansh sends it directly (Drive/AirDrop) in case any regeneration script needs raw returns
+- [ ] Agree on the regime numbering once (see mapping at bottom) so tables and figures from both tracks use identical labels
+
+---
+
+## Track A — Devansh: paper scaffold + portfolio & baseline results
+
+**Wednesday**
+- [ ] Sync local `paper/` clone to Overleaf head (it drifts — hard reset to origin first)
+- [ ] Convert draft to **ACM sigconf, double-blind**; get it compiling
+- [ ] Purge every April-era claim (see Dead Numbers) — delete now so nothing stale survives into Friday
+- [ ] Post section skeleton in Overleaf (headings + one-liners). During Wed–Thu **only Devansh edits `main.tex`**; all Track B output lands as separate include files (`tables/*.tex`, `figs/regime/*`) to avoid conflicts
+
+**Thursday**
+- [ ] Baseline comparison table (LaTeX): held-out GMVP Sharpe for all 8 methods + bootstrap ties (from `results/oos_final/`)
+- [ ] Matrix-loss table: Frobenius / Stein / KL by method — the disconnect in one table
+- [ ] Disconnect figure or table: statistical rank vs portfolio rank reversal, visible at a glance
+- [ ] Equity curves figure from honest harness (tranched, GFC included) — `scripts/analysis/core/build_equity_curves.py`
+- [ ] Vol-target comparison (HAR vs model) — one small table
+- [ ] Collect disclosure facts: survivorship (universe selected on 2015–21 availability, backtest starts 2008), all tuning on 2008–2016 only (incl. γ=0.12, λ=0.08, mix weights), long-short GMVP leverage
+
+## Track B — Bree: regime characterization & regime-conditional results
+
+Everything here reads from committed results CSVs (`results/oos_final/`, `results/regime_cov_renorm/`, `REGIME_CONDITIONAL_ANALYSIS.md`); ask Devansh if a script needs the raw parquet.
+
+**Wednesday**
+- [ ] Read `REGIME_CONDITIONAL_ANALYSIS.md` end-to-end — it is the source of truth for everything in this track
+- [ ] Build the **regime signature table** (Regimes 1–4 × features: realized vol, avg correlation, mean return, persistence, % of days) as a standalone LaTeX include — from `results/regime_characterization` outputs / the conditional analysis script
+
+**Thursday**
+- [ ] Regenerate **regime timeline** and **transition-matrix heatmap** with numbered regime labels (scripts in `scripts/analysis/regime/`; drop the name-mapping step) → export to `paper/figs/regime/`
+- [ ] **Per-regime performance table**: model − persistence Sharpe gap by regime, tuning era vs held-out (numbers in Canonical Numbers below) as a LaTeX include
+- [ ] One-paragraph bullet summary of the regime-conditional story for Friday's prose: calm-market edge (descriptive, not tradeable), loses in every stress window, Regime "Normal" is the only era-consistent positive pocket (insignificant after multiple testing)
+- [ ] Sanity-check every number in your tables against Canonical Numbers below; flag any mismatch to Devansh immediately (a mismatch means we're reading a stale results file)
+
+**Thursday night — merge checkpoint (both):** all tables/figures pushed to Overleaf, compile clean, regime numbering consistent across both tracks. This is the gate for Friday.
+
+---
+
+## Friday — prose, together
+
+Working session (co-write or rapid ping-pong on Overleaf), in this order:
+
+- [ ] **Results prose** around the finished tables (parity result → disconnect → regime-conditional)
+- [ ] **Introduction**: motivation → framework → parity → disconnect as the hook
+- [ ] **Related work**: shrinkage estimators (Ledoit-Wolf, OAS, EWMA, HAR) · regime-switching models · forecast-evaluation literature (statistical loss vs portfolio outcome — positions the disconnect)
+- [ ] **Methodology trim** to fit the 8-page budget — keep the 5-stage pipeline, cut derivations that don't serve the two claims
+- [ ] **Limitations + Conclusion**
+- [ ] **Abstract** (written last, once results prose is frozen — promises exactly the A+B claims, nothing stronger)
+- [ ] **Anonymization sweep**: advisor-connected work (e.g. Cartea, Cucuringu & Jin 2023) cited in neutral third person; no "our prior work"
+- [ ] **Page cut + full proofread** against Canonical / Dead Numbers
+- [ ] **Email Mihai** with the Overleaf link — Friday night
+
+## Weekend — both
+
+- [ ] **Saturday:** triage Mihai's comments — number/figure fixes vs prose fixes, split on the spot
+- [ ] **Sunday:** final compliance pass (page limit, anonymity, template) → **submit with buffer before the AoE cutoff**
+
+---
+
+## Canonical numbers (use ONLY these)
+
+Held-out = 2017–2021; tuning era = 2008–2016. All Sharpes are standard whole-sample daily Sharpes on tranched (overlap-corrected) GMVP returns.
+
+**Held-out GMVP Sharpe:** model **0.582** · persistence **0.635** · EWMA **0.632** · mix 0.597 · rolling 0.566 · OAS 0.554 · Ledoit-Wolf 0.549 · shrinkage 0.546
+**Significance:** all pairwise gaps are statistical ties — moving-block bootstrap (block = 20-day horizon); model − persistence Δ = −0.053, p = 0.70, 95% CI [−0.27, +0.20]
+**Matrix losses (held-out):** Ledoit-Wolf Stein 839 / KL 420 beats model 1095 / 548; model wins **only Frobenius** (0.0252, best)
+**Ex-post GMVP variance:** model highest at 9.9×10⁻⁵ vs 8.8–9.2×10⁻⁵ for baselines (model is the *worst* min-variance portfolio)
+**Volatility target:** HAR beats model — MSE 0.176 vs 0.334
+**Terminal wealth (full sample, honest compounding):** model 1.88 vs persistence 1.82 (~9%/yr both)
+**Per-regime (model − persistence Sharpe gap, tuning / held-out):** "Calm Bull" +0.09 / −0.15 · "High Stress" −0.30 / −0.04 · "Moderate Bull" −0.19 / −0.09 · "Normal" **+0.22 / +0.13** (only era-consistent positive pocket, ~15–20% of days, insignificant after multiple testing)
+**Descriptive calm-market edge:** non-crisis Sharpe 1.435 (best of all methods), TW 6.66 vs pers 5.22; model loses in every crisis/stress window
+
+## Dead numbers (must NOT appear anywhere)
+
+Retracted April figures — if any survives in the draft, it's a bug:
+
+- Sharpe **1.041** (or any "model beats all baselines" claim) — was in-sample + nonstandard Sharpe
+- Terminal wealth **9.47** (or ~4× anything) — equity double-count
+- "**Superior in stress / crisis**" — reversed by the honest analysis; the model wins in *calm* markets and loses in stress
+- Wilcoxon **p < 0.001** significance claims — replaced by bootstrap ties (p ≥ 0.70)
+- Vol RMSE 0.233-era volatility numbers — superseded; HAR wins the vol comparison
+- Any result conditioning on `realized_vol` / `avg_corr` from backtest outputs — computed over the *future* window (look-ahead); the "hybrid OOS 0.773" result is fake
+
+## Named-regime → numbered-regime map
+
+Provisional (Step 0 locks it; verify against the regenerated signature table — cluster indices can shuffle between runs):
+- "Calm Bull" → Regime 1 · "Moderate Bull" → Regime 2 · "Normal" → Regime 3 · "High Stress" → Regime 4
+
+---
+
+## Definition of done (Friday night)
+
+- Compiles on ACM sigconf, ≤ page limit, fully anonymized
+- Both claims (parity + disconnect) in abstract, intro, and conclusion — nothing stronger anywhere
+- Every number matches Canonical Numbers; zero Dead Numbers present
+- Regimes numbered with a signature table; identical numbering in every table and figure
+- Disclosures present (survivorship, tuning sample, leverage)
+- Mihai notified with the Overleaf link

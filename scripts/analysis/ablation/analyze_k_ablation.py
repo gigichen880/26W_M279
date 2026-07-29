@@ -12,9 +12,15 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
+
+# Ensure project root is on sys.path so `scripts.*` imports work when run directly.
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.analysis.utils.paths import RESULTS_DIR
 from scripts.analysis.utils.paths import resolve_figs_dir
@@ -164,8 +170,9 @@ def plot_k_ablation(
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=9)
     else:
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        ax = axes[0, 0]
+        # Covariance: 1×3 panels (drop Win Rate)
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        ax = axes[0]
         fro_vals = [results[k]["fro"] for k in k_values]
         ax.plot(k_values, fro_vals, "o-", linewidth=2, markersize=8, color="#E74C3C")
         ax.axvline(x=1, color="gray", linestyle="--", alpha=0.5, label="K=1 (no regimes)")
@@ -174,7 +181,7 @@ def plot_k_ablation(
         ax.set_title("Covariance Forecast Error (lower is better)", fontweight="bold")
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=9)
-        ax = axes[0, 1]
+        ax = axes[1]
         sharpe_vals = [results[k]["gmvp_sharpe"] for k in k_values]
         ax.plot(k_values, sharpe_vals, "o-", linewidth=2, markersize=8, color="#3498DB")
         ax.axvline(x=1, color="gray", linestyle="--", alpha=0.5, label="K=1 (no regimes)")
@@ -183,18 +190,7 @@ def plot_k_ablation(
         ax.set_title("Portfolio Sharpe (higher is better)", fontweight="bold")
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=9)
-        ax = axes[1, 0]
-        wr_vals = [win_rates.get(k, np.nan) for k in k_values]
-        ax.plot(k_values, wr_vals, "o-", linewidth=2, markersize=8, color="#2ECC71")
-        ax.axhline(y=50, color="red", linestyle="--", alpha=0.5, label="50% (neutral)")
-        ax.axvline(x=1, color="gray", linestyle="--", alpha=0.5, label="K=1 (no regimes)")
-        ax.set_xlabel("Number of Regimes (K)")
-        ax.set_ylabel("Win Rate vs Roll (%)")
-        ax.set_title("Win Rate (% dates Model Fro < Roll Fro)", fontweight="bold")
-        ax.set_ylim(40, 80)
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=9)
-        ax = axes[1, 1]
+        ax = axes[2]
         turn_vals = [results[k]["turnover"] for k in k_values]
         ax.plot(k_values, turn_vals, "o-", linewidth=2, markersize=8, color="#F39C12")
         ax.axvline(x=1, color="gray", linestyle="--", alpha=0.5, label="K=1 (no regimes)")

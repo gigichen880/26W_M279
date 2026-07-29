@@ -10,7 +10,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from scripts.analysis.regime.regime_label_utils import get_regime_name_map_for_backtest
 from scripts.analysis.utils.paths import resolve_backtest_path
+from similarity_forecast.regime_labels import (
+    compute_regime_diagnostics,
+    infer_n_regimes,
+    save_regime_name_map,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RESULTS_DIR = REPO_ROOT / "results"
@@ -32,29 +38,6 @@ def is_in_crisis(date: pd.Timestamp, periods: list) -> bool:
         if start <= date <= end:
             return True
     return False
-
-
-def suggest_regime_name(row: pd.Series, is_vol: bool = False) -> str:
-    crisis_pct = row.get("crisis_overlap", 0) if "crisis_overlap" in row.index else 0
-    if pd.notna(crisis_pct) and crisis_pct > 30:
-        return "Crisis/High Stress"
-    if not is_vol:
-        sharpe = row.get("mean_gmvp_sharpe", np.nan)
-        turnover = row.get("mean_turnover", np.nan)
-        fro = row.get("mean_fro", np.nan)
-        if pd.notna(sharpe) and sharpe > 1.5 and pd.notna(turnover) and turnover < 0.5:
-            return "Calm Bull"
-        if pd.notna(sharpe) and sharpe < 0.5:
-            return "Stress/Low Sharpe"
-        if pd.notna(fro) and fro > 0.025:
-            return "High Uncertainty"
-        if pd.notna(turnover) and turnover > 0.7:
-            return "Volatile/Choppy"
-    else:
-        vol_mse = row.get("mean_vol_mse", np.nan)
-        if pd.notna(vol_mse) and vol_mse > 0.05:
-            return "High Vol MSE"
-    return "Normal/Transition"
 
 
 def main() -> None:
@@ -82,7 +65,7 @@ def main() -> None:
         return
 
     is_vol = args.target == "volatility" or (args.target == "auto" and "model_vol_mse" in df.columns)
-    K = 4
+    K = infer_n_regimes(df)
     crisis_periods = get_crisis_periods()
     df["in_crisis"] = df["date"].apply(lambda d: is_in_crisis(d, crisis_periods))
 
@@ -113,12 +96,20 @@ def main() -> None:
         rows.append(row)
 
     chars = pd.DataFrame(rows)
-    chars["suggested_name"] = chars.apply(lambda r: suggest_regime_name(r, is_vol=is_vol), axis=1)
-
     out_name = "regime_characterization_volatility.csv" if is_vol else "regime_characterization.csv"
     tag = "regime_volatility" if is_vol else "regime_covariance"
     out_path = RESULTS_DIR / tag / out_name
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        rmap = get_regime_name_map_for_backtest(backtest_path, df=df)
+        save_regime_name_map(out_path.parent / "regime_name_map.json", rmap)
+        chars["regime_label"] = chars["regime"].map(lambda k: rmap.get(int(k), ""))
+        diag = compute_regime_diagnostics(df)
+        diag["regime_stats"].to_csv(out_path.parent / "regime_diagnostics_stats.csv", index=False)
+        diag["crisis_window_distributions"].to_csv(out_path.parent / "regime_diagnostics_crisis_windows.csv")
+    except Exception as exc:
+        print(f"Note: data-driven regime labels unavailable ({exc})")
+
     chars.to_csv(out_path, index=False)
     print(f"Saved: {out_path}")
 
