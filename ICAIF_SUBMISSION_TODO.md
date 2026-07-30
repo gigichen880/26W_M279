@@ -34,18 +34,18 @@ Combine options A + B. The paper claims two things, and only these two:
 ## Track A — Devansh: paper scaffold + portfolio & baseline results
 
 **Wednesday**
-- [ ] Sync local `paper/` clone to Overleaf head (it drifts — hard reset to origin first)
-- [ ] Convert draft to **ACM sigconf, double-blind**; get it compiling
-- [ ] Purge every April-era claim (see Dead Numbers) — delete now so nothing stale survives into Friday
-- [ ] Post section skeleton in Overleaf (headings + one-liners). During Wed–Thu **only Devansh edits `main.tex`**; all Track B output lands as separate include files (`tables/*.tex`, `figs/regime/*`) to avoid conflicts
+- [x] Sync local `paper/` clone to Overleaf head (it drifts — hard reset to origin first)
+- [x] Convert draft to **ACM sigconf, double-blind**; get it compiling
+- [x] Purge every April-era claim (see Dead Numbers) — delete now so nothing stale survives into Friday
+- [x] Post section skeleton in Overleaf (headings + one-liners). During Wed–Thu **only Devansh edits `main.tex`**; all Track B output lands as separate include files (`tables/*.tex`, `figs/regime/*`) to avoid conflicts
 
 **Thursday**
-- [ ] Baseline comparison table (LaTeX): held-out GMVP Sharpe for all 8 methods + bootstrap ties (from `results/oos_final/`)
-- [ ] Matrix-loss table: Frobenius / Stein / KL by method — the disconnect in one table
-- [ ] Disconnect figure or table: statistical rank vs portfolio rank reversal, visible at a glance
-- [ ] Equity curves figure from honest harness (tranched, GFC included) — `scripts/analysis/core/build_equity_curves.py`
-- [ ] Vol-target comparison (HAR vs model) — one small table
-- [ ] Collect disclosure facts: survivorship (universe selected on 2015–21 availability, backtest starts 2008), all tuning on 2008–2016 only (incl. γ=0.12, λ=0.08, mix weights), long-short GMVP leverage
+- [x] Baseline comparison table (LaTeX): held-out GMVP Sharpe for all 8 methods + bootstrap ties (from `results/oos_final/`)
+- [x] Matrix-loss table: Frobenius / Stein / KL by method — the disconnect in one table
+- [x] Disconnect figure or table: statistical rank vs portfolio rank reversal, visible at a glance
+- [x] Equity curves figure from honest harness (tranched, GFC included) — `scripts/analysis/core/build_equity_curves.py`
+- [x] Vol-target comparison (HAR vs model) — one small table
+- [x] Collect disclosure facts: survivorship (universe selected on 2015–21 availability, backtest starts 2008), all tuning on 2008–2016 only (incl. γ=0.12, λ=0.08, mix weights), long-short GMVP leverage
 
 ## Track B — Bree: regime characterization & regime-conditional results
 
@@ -61,7 +61,7 @@ Everything here reads from committed results CSVs (`results/oos_final/`, `result
 - [x] One-paragraph bullet summary of the regime-conditional story for Friday's prose: calm-market edge (descriptive, not tradeable), loses in every stress window, Regime "Normal" is the only era-consistent positive pocket (insignificant after multiple testing) *(→ `results/regime_characterization/regime_conditional_prose_bullets.md`; paper label = Regime 3)*
 - [x] Sanity-check every number in your tables against Canonical Numbers below; flag any mismatch to Devansh immediately (a mismatch means we're reading a stale results file) *(gaps match Canonical; signature↔transition persistence match; **flag:** `results/oos_final/gmvp_daily_returns.parquet` missing locally so gaps cannot be recomputed from scratch — table uses Canonical Numbers)*
 
-**Thursday night — merge checkpoint (both):** all tables/figures pushed to Overleaf, compile clean, regime numbering consistent across both tracks. This is the gate for Friday.
+**Thursday night — merge checkpoint (both): DONE (Overleaf 95966d8)** — all tables/figures pushed to Overleaf, compile clean, regime numbering consistent across both tracks. This is the gate for Friday.
 
 ---
 
