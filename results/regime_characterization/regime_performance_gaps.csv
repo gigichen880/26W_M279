@@ -1,0 +1,5 @@
+paper_regime,legacy_name,gap_tuning,gap_held_out,era_consistent_positive
+1,Calm Bull,0.09,-0.15,0
+2,Moderate Bull,-0.19,-0.09,0
+3,Normal,0.22,0.13,1
+4,High Stress,-0.3,-0.04,0

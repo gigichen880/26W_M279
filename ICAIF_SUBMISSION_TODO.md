@@ -56,10 +56,10 @@ Everything here reads from committed results CSVs (`results/oos_final/`, `result
 - [x] Build the **regime signature table** (Regimes 1–4 × features: realized vol, avg correlation, mean return, persistence, % of days) as a standalone LaTeX include — from `results/regime_characterization` outputs / the conditional analysis script *(→ `paper/tables/regime_signature.tex`; rebuild via `python -m scripts.analysis.regime.build_regime_signature_table`)*
 
 **Thursday**
-- [ ] Regenerate **regime timeline** and **transition-matrix heatmap** with numbered regime labels (scripts in `scripts/analysis/regime/`; drop the name-mapping step) → export to `paper/figs/regime/`
-- [ ] **Per-regime performance table**: model − persistence Sharpe gap by regime, tuning era vs held-out (numbers in Canonical Numbers below) as a LaTeX include
-- [ ] One-paragraph bullet summary of the regime-conditional story for Friday's prose: calm-market edge (descriptive, not tradeable), loses in every stress window, Regime "Normal" is the only era-consistent positive pocket (insignificant after multiple testing)
-- [ ] Sanity-check every number in your tables against Canonical Numbers below; flag any mismatch to Devansh immediately (a mismatch means we're reading a stale results file)
+- [x] Regenerate **regime timeline** and **transition-matrix heatmap** with numbered regime labels (scripts in `scripts/analysis/regime/`; drop the name-mapping step) → export to `paper/figs/regime/` *(also mirrored in `results/regime_characterization/figs/`; rebuild via `python -m scripts.analysis.regime.build_icaif_regime_figures`)*
+- [x] **Per-regime performance table**: model − persistence Sharpe gap by regime, tuning era vs held-out (numbers in Canonical Numbers below) as a LaTeX include *(→ `paper/tables/regime_performance.tex`; rebuild via `python -m scripts.analysis.regime.build_regime_performance_table`)*
+- [x] One-paragraph bullet summary of the regime-conditional story for Friday's prose: calm-market edge (descriptive, not tradeable), loses in every stress window, Regime "Normal" is the only era-consistent positive pocket (insignificant after multiple testing) *(→ `results/regime_characterization/regime_conditional_prose_bullets.md`; paper label = Regime 3)*
+- [x] Sanity-check every number in your tables against Canonical Numbers below; flag any mismatch to Devansh immediately (a mismatch means we're reading a stale results file) *(gaps match Canonical; signature↔transition persistence match; **flag:** `results/oos_final/gmvp_daily_returns.parquet` missing locally so gaps cannot be recomputed from scratch — table uses Canonical Numbers)*
 
 **Thursday night — merge checkpoint (both):** all tables/figures pushed to Overleaf, compile clean, regime numbering consistent across both tracks. This is the gate for Friday.
 
