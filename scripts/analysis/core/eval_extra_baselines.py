@@ -126,10 +126,12 @@ def main() -> None:
             except Exception:
                 continue
             mm = eval_all_metrics(S, Sigma_true, fut, long_only=False)  # unfloored (gmvp_only)
-            mat_rows.append({"date": row["date"], "method": name,
-                             **{k: mm.get(k) for k in ("fro", "stein", "kl", "logeuc")}})
             w = gmvp_weights(_spd_floor(S, floor_eps))
             rp = gmvp_daily_returns_renorm(fut, w)
+            rp_fin = rp[np.isfinite(rp)]
+            gvar = float(np.var(rp_fin, ddof=1)) if rp_fin.size > 1 else np.nan
+            mat_rows.append({"date": row["date"], "method": name, "gmvp_var": gvar,
+                             **{k: mm.get(k) for k in ("fro", "stein", "kl", "logeuc")}})
             for j in range(len(fut_dates)):
                 daily_rows.append({"date": fut_dates[j], "raw_anchor": a,
                                    "method": name, "ret": float(rp[j])})
@@ -139,6 +141,13 @@ def main() -> None:
     new_daily = pd.DataFrame(daily_rows)
     new_daily["date"] = pd.to_datetime(new_daily["date"])
     new_tr = bec.tranched_daily_returns(new_daily)
+
+    # Persist artifacts so summaries are reproducible without re-running.
+    out_dir = os.path.join(args.tag_dir, "extra_baselines")
+    os.makedirs(out_dir, exist_ok=True)
+    pd.DataFrame(mat_rows).to_csv(os.path.join(out_dir, "per_anchor_metrics.csv"), index=False)
+    new_daily.to_parquet(os.path.join(out_dir, "gmvp_daily_returns_extra.parquet"), index=False)
+    print(f"Saved: {out_dir}/per_anchor_metrics.csv, gmvp_daily_returns_extra.parquet")
 
     # model daily returns from the run's own artifact
     md = pd.read_parquet(os.path.join(args.tag_dir, "gmvp_daily_returns.parquet"))
@@ -162,9 +171,9 @@ def main() -> None:
             print(f"    {meth:8} sharpe={_sharpe(r):+.4f}  tw={np.prod(1+r):.3f}")
         ms = mat[(mat.date >= lo) & (mat.date <= hi)]
         if len(ms):
-            print("  Matrix losses (mean, new baselines):")
-            g = ms.groupby("method")[["fro", "stein", "kl", "logeuc"]].mean()
-            print(g.to_string(float_format=lambda x: f"{x:.4f}"))
+            print("  Matrix losses + ex-post GMVP variance (mean, new baselines):")
+            g = ms.groupby("method")[["fro", "stein", "kl", "logeuc", "gmvp_var"]].mean()
+            print(g.to_string(float_format=lambda x: f"{x:.6g}"))
 
     full = (tr.index.min(), tr.index.max())
     report((full[0], pd.to_datetime(args.split) - pd.Timedelta(days=1)), "TUNING (in-sample)")
