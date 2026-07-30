@@ -65,6 +65,26 @@ Everything here reads from committed results CSVs (`results/oos_final/`, `result
 
 ---
 
+## Reviewer-remediation split (added Thu Jul 30, after external referee pass)
+
+We ran the draft through an independent referee review (GPT/codex; full text with Devansh — ask if you want it). Verdict: **weak reject as-is, borderline/weak-accept if revised as an evaluation/negative-result study.** The fixable blockers are split below. Same collision rules as before: only Devansh edits `main.tex`; Bree's deliverables land as committed `.md`/`.tex`/CSV files on GitHub.
+
+### Bree — code forensics & positioning (everything runs off the committed repo; no parquets needed)
+
+- [ ] **B1 (top priority): audit the volatility MSE/R² inconsistency.** In the paper's vol table, MSE and R² rank methods *differently* (e.g. rolling beats model on MSE but loses on R²), which is impossible if both metrics use the same observations and the same SST. Read `scripts/analysis/core/eval_vol_har.py`, pin down exactly how each metric pools (across asset-days? per asset then averaged? which SST?), and whether all methods share the identical sample. Deliverable: `docs/VOL_METRIC_AUDIT.md` with the definitions, the cause of the ranking disagreement, and corrected numbers under one consistent definition if computable from committed artifacts (flag if a re-run is needed).
+- [ ] **B2: reviewer Q&A facts file.** The referee asked ~22 reproducibility questions answerable from `similarity_forecast/` + configs: exact target construction (covariance of days t+1…t+h?), neighbor eligibility (is the condition t_i + h ≤ t?), whether PCA/clustering/transition matrices refit walk-forward during 2017–2021 (hyperparameters frozen, estimation continues — verify), eigenvalue floor values (`stability.floor_eps`) and where applied, fuzzy exponent, order of diagonal shrinkage vs log-Euclidean mixing, and whether the confidence-fallback-to-persistence ever fires (`results/oos_final/guardrail_stats.json` says 0% — confirm and state). Deliverable: `docs/EVAL_SPEC_ANSWERS.md`, format: question → answer → file:line. Devansh converts it into the Methods reproducibility paragraph Friday.
+- [ ] **B3: related-work notes for the disconnect.** Ready-to-paste BibTeX + 1–2 sentences each: Engle & Colacito (2006) economic value of covariance forecasts; Fleming, Kirby & Ostdiek (2001, 2003) volatility timing; DeMiguel, Garlappi & Uppal (2009) 1/N; Patton (2011) volatility loss-function robustness. Plus one sentence on what our version adds (modern shrinkage baselines, one controlled harness, the rank-deficiency/flooring mechanism). Deliverable: `docs/RELATED_WORK_DISCONNECT.md`.
+- [ ] **B4: revise the regime prose bullets per referee warning.** Never phrase Regime 3 as where the model "earns its edge" — it is an exploratory, insignificant pocket; descriptive language only. Update `results/regime_characterization/regime_conditional_prose_bullets.md`. Optional bonus: regime-stability check from the `regime_assigned` column in the committed `results/oos_final/backtest.csv` (are labels consistent across refits?) — one small table would blunt the "are these regimes real?" attack.
+
+### Devansh — parquets, scai4, manuscript
+
+- [ ] **D1: audit `oos_significance.py`** — verify the bootstrap resamples daily-return blocks and recomputes whole-sample Sharpe per draw (not per-window Sharpes); re-run properly if not; correct the paper's description either way.
+- [ ] **D2: scai4 runs tonight:** (a) K=1 under the final config, held-out — the referee's "key baseline" for whether the regime layer adds anything; (b) K∈{1…6} re-selection sweep on 2008–2016 only — kills the K-leakage objection; (c) ex-post GMVP variance for LW/OAS/EWMA to fill the table blanks.
+- [ ] **D3: immediate main.tex fixes:** abstract Frobenius sentence (model is 3rd overall — best only vs LW/OAS/EWMA/roll/pers), "unboundedly bad" → "extremely large and floor-sensitive", "comprehensive ablation" → "staged", vol section "extends naturally" → "tested and did not transfer competitively", clarify anchor frequency for transition estimation.
+- [ ] **D4 (Friday):** Methods reproducibility paragraph + pseudocode box from B2; disconnect reframe — lead with "statistical losses separate methods by orders of magnitude; portfolio outcomes do not separate them at all" (robust version, doesn't rely on insignificant rank orderings); merge B3 into Related Work.
+
+---
+
 ## Friday — prose, together
 
 Working session (co-write or rapid ping-pong on Overleaf), in this order:
