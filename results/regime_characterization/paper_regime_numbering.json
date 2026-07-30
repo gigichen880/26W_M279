@@ -1,0 +1,34 @@
+{
+  "source": "results/oos_final/regime_name_map.json",
+  "note": "Paper uses Regimes 1\u20134 only. legacy_name is internal bookkeeping for sanity checks against Canonical Numbers; do not print in the paper.",
+  "legacy_name_by_cluster_id": {
+    "0": "Calm Bull",
+    "1": "High Stress",
+    "2": "Moderate Bull",
+    "3": "Normal"
+  },
+  "paper_regime_by_cluster_id": {
+    "0": 1,
+    "1": 4,
+    "2": 2,
+    "3": 3
+  },
+  "cluster_id_by_paper_regime": {
+    "1": 0,
+    "4": 1,
+    "2": 2,
+    "3": 3
+  },
+  "legacy_name_by_paper_regime": {
+    "1": "Calm Bull",
+    "4": "High Stress",
+    "2": "Moderate Bull",
+    "3": "Normal"
+  },
+  "paper_regime_by_legacy_name": {
+    "Calm Bull": 1,
+    "Moderate Bull": 2,
+    "Normal": 3,
+    "High Stress": 4
+  }
+}

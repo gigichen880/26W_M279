@@ -24,10 +24,10 @@ Combine options A + B. The paper claims two things, and only these two:
 
 ## Step 0 — Unblock Bree (Devansh, Wednesday morning, FIRST)
 
-- [ ] Commit + push the honest-results work so Bree can pull: `results/oos_final/`, `results/regime_cov_renorm/`, `results/figs_regime_similarity/`, `REGIME_CONDITIONAL_ANALYSIS.md`, `scripts/analysis/core/conditional_gmvp_analysis.py`, and other uncommitted analysis scripts (local commits `3f97bda`, `f8a37b6` are also unpushed)
-- [ ] Bree: clone repo, `pip install -r requirements.txt`, confirm the results CSVs open
-- [ ] `data/processed/returns_universe_100.parquet` is gitignored — Devansh sends it directly (Drive/AirDrop) in case any regeneration script needs raw returns
-- [ ] Agree on the regime numbering once (see mapping at bottom) so tables and figures from both tracks use identical labels
+- [x] Commit + push the honest-results work so Bree can pull: `results/oos_final/`, `results/regime_cov_renorm/`, `results/figs_regime_similarity/`, `REGIME_CONDITIONAL_ANALYSIS.md`, `scripts/analysis/core/conditional_gmvp_analysis.py`, and other uncommitted analysis scripts (local commits `3f97bda`, `f8a37b6` are also unpushed)
+- [x] Bree: clone repo, `pip install -r requirements.txt`, confirm the results CSVs open *(core deps in `.venv`; full `requirements.txt` matplotlib wheel failed on py3.13 — figures Thu need a binary matplotlib install)*
+- [x] `data/processed/returns_universe_100.parquet` is gitignored — Devansh sends it directly (Drive/AirDrop) in case any regeneration script needs raw returns *(present locally)*
+- [x] Agree on the regime numbering once (see mapping at bottom) so tables and figures from both tracks use identical labels *(locked in `results/regime_characterization/paper_regime_numbering.json`)*
 
 ---
 
@@ -52,8 +52,8 @@ Combine options A + B. The paper claims two things, and only these two:
 Everything here reads from committed results CSVs (`results/oos_final/`, `results/regime_cov_renorm/`, `REGIME_CONDITIONAL_ANALYSIS.md`); ask Devansh if a script needs the raw parquet.
 
 **Wednesday**
-- [ ] Read `REGIME_CONDITIONAL_ANALYSIS.md` end-to-end — it is the source of truth for everything in this track
-- [ ] Build the **regime signature table** (Regimes 1–4 × features: realized vol, avg correlation, mean return, persistence, % of days) as a standalone LaTeX include — from `results/regime_characterization` outputs / the conditional analysis script
+- [x] Read `REGIME_CONDITIONAL_ANALYSIS.md` end-to-end — it is the source of truth for everything in this track
+- [x] Build the **regime signature table** (Regimes 1–4 × features: realized vol, avg correlation, mean return, persistence, % of days) as a standalone LaTeX include — from `results/regime_characterization` outputs / the conditional analysis script *(→ `paper/tables/regime_signature.tex`; rebuild via `python -m scripts.analysis.regime.build_regime_signature_table`)*
 
 **Thursday**
 - [ ] Regenerate **regime timeline** and **transition-matrix heatmap** with numbered regime labels (scripts in `scripts/analysis/regime/`; drop the name-mapping step) → export to `paper/figs/regime/`
@@ -112,8 +112,9 @@ Retracted April figures — if any survives in the draft, it's a bug:
 
 ## Named-regime → numbered-regime map
 
-Provisional (Step 0 locks it; verify against the regenerated signature table — cluster indices can shuffle between runs):
-- "Calm Bull" → Regime 1 · "Moderate Bull" → Regime 2 · "Normal" → Regime 3 · "High Stress" → Regime 4
+**Locked** (Step 0; verified against `results/oos_final` signature table — use `results/regime_characterization/paper_regime_numbering.json`):
+- "Calm Bull" → Regime 1 (cluster 0) · "Moderate Bull" → Regime 2 (cluster 2) · "Normal" → Regime 3 (cluster 3) · "High Stress" → Regime 4 (cluster 1)
+- Paper prints **Regimes 1–4 only**; legacy names are internal bookkeeping for Canonical Number checks.
 
 ---
 
