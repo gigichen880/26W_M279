@@ -121,17 +121,49 @@ def main() -> None:
     har["date"] = pd.to_datetime(har["date"])
     merged = bt.merge(har, on="date", how="left")
 
+    def _pooled_r2(mse: pd.Series, r2: pd.Series) -> float:
+        """SST-weighted / pooled R² from per-anchor MSE and R² (equal n per anchor).
+
+        Per-anchor: R2 = 1 - SSE/SST with SSE = n*MSE. Recover SST ∝ MSE/(1-R2),
+        then pooled R2 = 1 - sum(MSE) / sum(MSE/(1-R2)). See docs/VOL_METRIC_AUDIT.md.
+        """
+        m = mse.to_numpy(dtype=float)
+        r = r2.to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sst = m / (1.0 - r)
+        ok = np.isfinite(m) & np.isfinite(sst) & (sst > 0)
+        if not ok.any():
+            return float("nan")
+        return float(1.0 - m[ok].sum() / sst[ok].sum())
+
     def slice_report(df, label):
-        print(f"\n===== {label}  (n={len(df)}, HAR non-null={df['har_vol_mse'].notna().sum()}) =====")
+        # Common sample: every method on anchors where HAR is finite (avoids
+        # comparing HAR's nan-skipped mean to baselines averaged over more dates).
+        if "har_vol_mse" in df.columns:
+            df = df.loc[df["har_vol_mse"].notna()].copy()
+        print(f"\n===== {label}  (common-sample n={len(df)}) =====")
         methods = {"model": "model", "har": "har", "roll": "roll", "pers": "pers", "shrink": "shrink"}
-        hdr = f"{'method':8}{'vol_mse':>10}{'vol_r2':>10}{'vol_qlike':>12}"
+        hdr = (
+            f"{'method':8}{'vol_mse':>10}{'r2_mean':>10}{'r2_pooled':>12}{'vol_qlike':>12}"
+        )
         print(hdr)
+        print(
+            "# r2_mean = unweighted mean of per-anchor R² (can disagree with MSE rank); "
+            "# r2_pooled = SST-weighted / pooled R² (consistent with MSE rank)."
+        )
         for label_m, pref in methods.items():
-            mse = df.get(f"{pref}_vol_mse"); r2 = df.get(f"{pref}_vol_r2"); ql = df.get(f"{pref}_vol_qlike")
+            mse = df.get(f"{pref}_vol_mse")
+            r2 = df.get(f"{pref}_vol_r2")
+            ql = df.get(f"{pref}_vol_qlike")
             if mse is None or mse.notna().sum() == 0:
                 continue
-            print(f"{label_m:8}{mse.mean():10.4f}{(r2.mean() if r2 is not None else float('nan')):10.4f}"
-                  f"{(ql.mean() if ql is not None else float('nan')):12.4f}")
+            r2_mean = float(r2.mean()) if r2 is not None else float("nan")
+            r2_pool = _pooled_r2(mse, r2) if r2 is not None else float("nan")
+            ql_mean = float(ql.mean()) if ql is not None else float("nan")
+            print(
+                f"{label_m:8}{float(mse.mean()):10.4f}{r2_mean:10.4f}"
+                f"{r2_pool:12.4f}{ql_mean:12.4f}"
+            )
 
     split = pd.to_datetime(args.split)
     slice_report(merged[merged.date < split], "TUNING (in-sample)")

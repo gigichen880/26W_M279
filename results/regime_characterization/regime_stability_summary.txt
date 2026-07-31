@@ -1,0 +1,3 @@
+consecutive_anchor_same_regime_pct=72.01
+soft_max_prob_mean=0.250000
+note=filtered_posteriors_degenerate_uniform; hard_assignments_used_for_stability
