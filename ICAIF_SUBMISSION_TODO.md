@@ -78,9 +78,9 @@ We ran the draft through an independent referee review (GPT/codex; full text wit
 
 ### Devansh — parquets, scai4, manuscript
 
-- [ ] **D1: audit `oos_significance.py`** — verify the bootstrap resamples daily-return blocks and recomputes whole-sample Sharpe per draw (not per-window Sharpes); re-run properly if not; correct the paper's description either way.
-- [ ] **D2: scai4 runs tonight:** (a) K=1 under the final config, held-out — the referee's "key baseline" for whether the regime layer adds anything; (b) K∈{1…6} re-selection sweep on 2008–2016 only — kills the K-leakage objection; (c) ex-post GMVP variance for LW/OAS/EWMA to fill the table blanks.
-- [ ] **D3: immediate main.tex fixes:** abstract Frobenius sentence (model is 3rd overall — best only vs LW/OAS/EWMA/roll/pers), "unboundedly bad" → "extremely large and floor-sensitive", "comprehensive ablation" → "staged", vol section "extends naturally" → "tested and did not transfer competitively", clarify anchor frequency for transition estimation.
+- [x] **D1: audit `oos_significance.py`** — verify the bootstrap resamples daily-return blocks and recomputes whole-sample Sharpe per draw (not per-window Sharpes); re-run properly if not; correct the paper's description either way. *(Audit: implementation was already correct — resamples synchronized daily-return blocks, recomputes whole-sample Sharpe per draw; paper description fixed; block-length robustness 10/20/40/60 added, all ties, `results/oos_final/bootstrap_block_robustness.csv`.)*
+- [x] **D2: scai4 runs tonight:** (a) K=1 under the final config, held-out — the referee's "key baseline" for whether the regime layer adds anything; (b) K∈{1…6} re-selection sweep on 2008–2016 only — kills the K-leakage objection; (c) ex-post GMVP variance for LW/OAS/EWMA to fill the table blanks. *(Done: clean sweep = step K=1→K≥2 (obj 1.445→~1.55) then flat, K=4 argmax 1.550; K=1 held-out 0.523 vs model 0.582, Δ=+0.059, p=0.69 — regime layer's OOS value not established; variances ×10⁻⁵: EWMA 9.31, OAS 9.88, LW 10.05, model 11.47 still worst; all folded into paper 8dc9890.)*
+- [x] **D3: immediate main.tex fixes:** abstract Frobenius sentence (model is 3rd overall — best only vs LW/OAS/EWMA/roll/pers), "unboundedly bad" → "extremely large and floor-sensitive", "comprehensive ablation" → "staged", vol section "extends naturally" → "tested and did not transfer competitively", clarify anchor frequency for transition estimation.
 - [ ] **D4 (Friday):** Methods reproducibility paragraph + pseudocode box from B2; disconnect reframe — lead with "statistical losses separate methods by orders of magnitude; portfolio outcomes do not separate them at all" (robust version, doesn't rely on insignificant rank orderings); merge B3 into Related Work.
 
 ---
@@ -107,6 +107,13 @@ Working session (co-write or rapid ping-pong on Overleaf), in this order:
 ---
 
 ## Canonical numbers (use ONLY these)
+
+**New (2026-07-31, D2 + membership finding):**
+- **Regime-count sweep, clean tuning window 2008–2016:** objective K=1 **1.445**, K=2 1.549, K=3 1.547, K=4 **1.550** (argmax), K=5 1.544, K=6 1.542; Frobenius K=1 0.0347 vs ~0.0282 for K≥2. Old 2012–2021 K-ablation numbers (1.079 peak, K=1 best Frobenius 0.0219) retired.
+- **K=1 vs full model, held-out, final pipeline:** K=1 Sharpe **0.523** vs model **0.582**; Δ = **+0.059**, p = **0.69**, CI [−0.21, +0.37] — regime layer's incremental OOS value indistinguishable from zero.
+- **Ex-post GMVP variance fill-ins (held-out, ×10⁻⁵):** EWMA **9.31**, OAS **9.88**, Ledoit-Wolf **10.05** (model 11.47 remains highest/worst).
+- **Extra-baseline ties (held-out, block=20):** model−LW Δ=+0.033 p=0.74 · model−OAS Δ=+0.029 p=0.78 · model−EWMA Δ=−0.050 p=0.78 · model−shrink Δ=+0.036 p=0.72.
+- **Membership degeneracy:** prediction-time FCM memberships = 1/K to ~1e-7 on every forecast date (both π and filtered α exported in oos_final backtest.csv). State-inference half of the regime layer is inert; neighbor-side regime weighting (training memberships) is active. Never describe soft memberships as informative probabilities at prediction time.
 
 Held-out = 2017–2021; tuning era = 2008–2016. All Sharpes are standard whole-sample daily Sharpes on tranched (overlap-corrected) GMVP returns.
 
