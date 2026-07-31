@@ -1,0 +1,13 @@
+{
+  "pct_guardrail_triggered": 0.0,
+  "n_days": 411,
+  "guardrail_trace_ratio_mean": 2.4381105284021602,
+  "guardrail_trigger_reason_counts": {
+    "": 411
+  },
+  "guardrail_mode": "invalid_only",
+  "pct_model_blended_to_pers": 100.0,
+  "model_pers_blend_lambda_mean": 0.6500000765855836,
+  "model_pers_blend_lambda_min": 0.6500000021257075,
+  "model_regime_conf_adj_mean": 8.205599155906492e-08
+}
