@@ -1,5 +1,7 @@
 # Volatility MSE / R² metric audit (Bree B1)
 
+> **SUPERSEDED NUMBERS (note added 2026-07-31).** The MSE/R² values below (HAR 0.176, model 0.334, etc.) are from the *full* held-out sample and predate the fix this audit recommended. The patched `eval_vol_har.py` re-run on the common sample (n = 241) is now canonical: HAR MSE **0.177** / pooled R² **0.703**; pers 0.261 / 0.494; roll 0.320 / 0.380; model **0.324** / 0.372; shrink 0.340 / 0.341. See the Canonical Numbers section of `ICAIF_SUBMISSION_TODO.md` and the paper's `tab:vol_har`. The diagnosis and definitions below remain the reference for *why* the old column was wrong.
+
 **Date:** 2026-07-30  
 **Scope:** Why the paper’s held-out vol table ranks methods differently by MSE vs \(R^2\), and what a consistent definition produces.  
 **Code:** `similarity_forecast/backtests.py::eval_vol_metrics`, `run_backtest.py` (vol branch), `scripts/analysis/core/eval_vol_har.py`.  

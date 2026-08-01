@@ -31,7 +31,7 @@ All numbers below are **held-out 2017–2021**, with hyperparameters selected on
 
 The model's strong-looking Stein/KL was only vs rolling/persistence and the fixed-γ strawman; **real Ledoit-Wolf beats it.** The model leads only on Frobenius, marginally.
 
-**Volatility (statistical):** HAR MSE **0.176**, R² **−0.026** vs model MSE 0.334, R² **−0.241** (negative → worse than the mean), pers 0.270, roll 0.331, shrink 0.350. HAR — the standard realized-vol baseline (Corsi 2009), cited but never run — roughly halves the model's error.
+**Volatility (statistical; corrected 2026-07-31 to common sample n=241 + pooled R², see `docs/VOL_METRIC_AUDIT.md`):** HAR MSE **0.177**, pooled R² **0.703** vs model MSE 0.324, pooled R² 0.372; pers 0.261/0.494, roll 0.320/0.380, shrink 0.340/0.341. HAR — the standard realized-vol baseline (Corsi 2009), cited but never run — roughly halves the model's error.
 
 **Also relevant (from prior revision):** the Markov filter is empirically inert (raw vs filtered differ < 1e-8); regime persistence is 28–33% vs the 25% chance level.
 
