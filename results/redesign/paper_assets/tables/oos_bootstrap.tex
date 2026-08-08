@@ -1,0 +1,18 @@
+\begin{table}[t]
+\centering
+\caption{Paired moving-block bootstrap for headline frozen OOS contrasts (5000 resamples). Blocks of length 20 are taken on the \emph{original} evaluation-anchor timeline; extreme-return filters are applied as a mask inside resampled blocks (so block length retains calendar spacing). Positive estimates mean SIM is worse. On the full panel, mean $R^{\mathrm{cond}}$ intervals cover zero because means are heavy-tail dominated; future-clean windows support both decision and Stein contrasts.}
+\label{tab:oosboot}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{llrrr}
+\toprule
+Panel & Contrast & Estimate & 95\% CI & Covers 0? \\
+\midrule
+Full & SIM $-$ EWMA, $R^{\mathrm{cond}}$ & 0.037 & $[-0.010,\,0.104]$ & Yes \\
+Full & SIM $-$ Persistence, $R^{\mathrm{cond}}$ & 0.036 & $[-0.003,\,0.093]$ & Yes \\
+Full & SIM $-$ Ledoit--Wolf, Stein & $3.55{\times}10^{7}$ & $[1.86,\,6.11]{\times}10^{7}$ & No \\
+Future $|r|\le0.5$ & SIM $-$ EWMA, $R^{\mathrm{cond}}$ & $1.90{\times}10^{-5}$ & $[0.4,\,2.7]{\times}10^{-5}$ & No \\
+Future $|r|\le0.5$ & SIM $-$ Ledoit--Wolf, Stein & $8.62{\times}10^{4}$ & $[7.31,\,9.80]{\times}10^{4}$ & No \\
+Lookback+future $|r|\le0.5$ & SIM $-$ Persistence, $R^{\mathrm{cond}}$ & $3.77{\times}10^{-5}$ & $[2.7,\,4.7]{\times}10^{-5}$ & No \\
+\bottomrule
+\end{tabular}}
+\end{table}
