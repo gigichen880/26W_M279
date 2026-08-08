@@ -1,0 +1,8 @@
+method,R_raw
+D0_pca8,0.0
+ewma,0.0
+ledoit_wolf,0.0
+oas,0.0
+persistence,0.0
+rolling,0.0
+shrink,0.0

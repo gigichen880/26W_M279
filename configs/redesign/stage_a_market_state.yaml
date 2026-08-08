@@ -1,0 +1,19 @@
+# Stage A — similarity-only on selection window (2013–2016)
+# Primary selection metric: mean conditioned GMVP variance regret
+tag: stage_a_market_state
+embedder_name: market_state
+pca_k: 8
+k_neighbors: 20
+metric: euclidean
+aggregation: log_euclidean
+eta: 0.01
+eval_split: select
+protocol:
+  lookback: 50
+  horizon: 20
+  neighbor_gap: 10
+  stride: 5
+  refit_every_days: 20
+  devel_end: "2012-12-31"
+  select_end: "2016-12-31"
+  test_start: "2017-01-01"

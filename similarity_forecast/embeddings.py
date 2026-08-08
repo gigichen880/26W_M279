@@ -412,3 +412,55 @@ class PCAWindowEmbedder:
         score_std = pad_to(score_std, self.k)
 
         return np.concatenate([pc_coords, top_evr, log_sv, score_mean, score_std], axis=0)
+
+
+@dataclass(frozen=True)
+class EconomicStateEmbedder:
+    """
+    Low-dimensional market-state embedding for regime-aware covariance forecasting.
+
+    Features from a lookback window (all scalars, N-invariant):
+      0 log mean realized vol
+      1 log vol-of-vol (cross-sectional std of asset vols)
+      2 mean pairwise correlation
+      3 top correlation eigenvalue
+      4 equal-weight mean return (lookback)
+      5 return autocorrelation (lag-1 of EW market)
+    Designed so FCM memberships need not collapse in high-D PCA space.
+    """
+
+    ddof: int = 1
+    eps: float = 1e-12
+
+    def embed(self, past_returns: NDArray[np.floating]) -> NDArray[np.floating]:
+        X = impute_returns_window(np.asarray(past_returns, dtype=float), fill_all_nan=0.0)
+        T, N = X.shape
+        ddof_eff = min(int(self.ddof), max(0, T - 1))
+        vols = np.std(X, axis=0, ddof=ddof_eff)
+        vols = np.maximum(vols, self.eps)
+        log_mean_vol = float(np.log(np.mean(vols)))
+        log_vov = float(np.log(max(float(np.std(vols, ddof=min(1, max(0, N - 1)))), self.eps)))
+
+        Sigma = cov_from_returns(X, ddof=ddof_eff)
+        C = corr_from_cov(Sigma, eps=self.eps)
+        off = C[np.triu_indices(N, k=1)]
+        mean_corr = float(np.nanmean(off)) if off.size else 0.0
+        ev = np.linalg.eigvalsh(C)
+        top_eig = float(ev[-1]) if ev.size else 1.0
+
+        ew = X.mean(axis=1)
+        mean_ret = float(np.mean(ew))
+        if T >= 3:
+            a = ew[1:] - ew[1:].mean()
+            b = ew[:-1] - ew[:-1].mean()
+            denom = float(np.sqrt(np.sum(a * a) * np.sum(b * b)) + self.eps)
+            ac1 = float(np.sum(a * b) / denom)
+        else:
+            ac1 = 0.0
+        return np.asarray(
+            [log_mean_vol, log_vov, mean_corr, top_eig, mean_ret, ac1], dtype=float
+        )
+
+    @property
+    def dim(self) -> int:
+        return 6
