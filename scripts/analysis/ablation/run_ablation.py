@@ -280,7 +280,20 @@ def run_ablation(
     # Rank grid runs by objective if present
     if mode in {"grid", "full_grid"} and (objective in summary.columns):
         obj = pd.to_numeric(summary[objective], errors="coerce")
-        higher_is_better = "sharpe" in objective.lower() or "r2" in objective.lower() or "mean" in objective.lower() and "vol_mse" not in objective.lower()
+        obj_l = objective.lower()
+        # Losses / risk metrics: lower is better. Do not treat bare "mean" as maximize
+        # (that incorrectly ranked model_gmvp_var_mean as higher-is-better).
+        lower_markers = (
+            "var", "mse", "mae", "rmse", "stein", "fro", "logeuc", "kl",
+            "turnover", "regret", "loss", "error",
+        )
+        higher_markers = ("sharpe", "r2")
+        if any(m in obj_l for m in lower_markers):
+            higher_is_better = False
+        elif any(m in obj_l for m in higher_markers):
+            higher_is_better = True
+        else:
+            higher_is_better = True
         summary["_objective"] = obj
         summary = summary.sort_values("_objective", ascending=not higher_is_better, na_position="last")
 

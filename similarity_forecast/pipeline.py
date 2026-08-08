@@ -100,6 +100,9 @@ class RegimeAwareSimilarityForecaster:
     # Output stability (improves GMVP variance / reduces extreme weights)
     output_shrink_toward_diag: float = 0.0   # blend forecast with its diagonal; 0=off, 0.1--0.3 often helps
     alpha_smooth_frac: float = 0.0           # blend regime alpha with uniform to reduce overconfidence; 0=off
+    # Decision-aware neighbor reweighting: kappa ← kappa * exp(temp * skill_i)
+    # skill_i = -log cond(Σ_i) of each training target (higher = better-conditioned analog).
+    neighbor_utility_temp: float = 0.0       # 0=off; try 0.5--2.0
 
     def _build_windows(self, R: NDArray[np.floating]) -> List[Tuple[int, slice, slice]]:
         """
@@ -203,6 +206,30 @@ class RegimeAwareSimilarityForecaster:
             trans_smooth=self.trans_smooth,
         )
         self.ALPHA_ = self.regime_model.filter_alpha(self.PI_, A=self.A_)
+
+        # Per-neighbor decision utility (conditioning of target covariance / precision)
+        self.neighbor_skill_ = None
+        if float(getattr(self, "neighbor_utility_temp", 0.0) or 0.0) > 0.0:
+            skills = []
+            for t in self.targets_:
+                A = np.asarray(t, dtype=float)
+                if A.ndim != 2 or A.shape[0] != A.shape[1]:
+                    skills.append(0.0)
+                    continue
+                A = 0.5 * (A + A.T)
+                try:
+                    cond = float(np.linalg.cond(A))
+                except Exception:
+                    cond = float("inf")
+                if not np.isfinite(cond) or cond <= 0:
+                    skills.append(-10.0)
+                else:
+                    skills.append(-np.log(max(cond, 1.0)))
+            s = np.asarray(skills, dtype=float)
+            mu, sd = float(np.mean(s)), float(np.std(s))
+            if sd > 1e-12:
+                s = (s - mu) / sd
+            self.neighbor_skill_ = s
 
         return self
     
@@ -343,6 +370,15 @@ class RegimeAwareSimilarityForecaster:
 
         kappa = self._kappa_from_dist(dist)
         kappa = kappa / max(float(kappa.sum()), self.eps)
+
+        # Optional decision-aware reweight by neighbor target conditioning
+        util_temp = float(getattr(self, "neighbor_utility_temp", 0.0) or 0.0)
+        skill = getattr(self, "neighbor_skill_", None)
+        if util_temp > 0.0 and skill is not None and idx.size > 0:
+            boost = np.exp(util_temp * np.asarray(skill[idx], dtype=float))
+            boost = np.where(np.isfinite(boost), boost, 1.0)
+            kappa = kappa * boost
+            kappa = kappa / max(float(kappa.sum()), self.eps)
 
         # ---- Stage 5: regime-aware neighbor weights ----
         PI_nbr = self.PI_[idx]  # (M, K)

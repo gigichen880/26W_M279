@@ -120,6 +120,33 @@ def corr_from_cov(Sigma: NDArray[np.floating], eps: float = 1e-12) -> NDArray[np
     return (Sigma * invd[None, :]) * invd[:, None]
 
 
+def assemble_corr_vol_covariance(
+    S_corr_source: NDArray[np.floating],
+    S_vol_source: NDArray[np.floating],
+    *,
+    eps: float = 1e-12,
+    proj_eps: float = 1e-8,
+) -> NDArray[np.floating]:
+    """
+    Rebuild Σ = D R D from a correlation source and a volatility source.
+
+    R = corr(S_corr_source) with unit diagonal enforced after SPD projection;
+    D = diag(sqrt(diag(S_vol_source))). Used for corr–vol factorization upgrades
+    where similarity/regimes supply dependence and a local vol forecaster
+    supplies scales.
+    """
+    R = corr_from_cov(np.asarray(S_corr_source, dtype=float), eps=eps)
+    R = project_to_spd(symmetrize(R), eps=proj_eps)
+    # Renormalize to a correlation matrix (unit diagonal) after projection.
+    dR = np.sqrt(np.maximum(np.diag(R), eps))
+    R = (R / dR[:, None]) / dR[None, :]
+    np.fill_diagonal(R, 1.0)
+
+    vol = np.sqrt(np.maximum(np.diag(np.asarray(S_vol_source, dtype=float)), eps))
+    S = (R * vol[:, None]) * vol[None, :]
+    return project_to_spd(symmetrize(S), eps=proj_eps)
+
+
 def validate_window(
     returns_window: NDArray[np.floating],
     max_na_pct: float = 0.3,

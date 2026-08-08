@@ -32,6 +32,8 @@ from similarity_forecast.backtests import (
     baseline_rolling_cov,
     baseline_persistence_realized_cov,
     baseline_shrink_to_diag,
+    baseline_ewma_cov,
+    baseline_ledoit_wolf,
     baseline_rolling_vol,
     baseline_persistence_vol,
     baseline_shrink_vol_toward_cs_mean,
@@ -40,7 +42,13 @@ from similarity_forecast.backtests import (
     gmvp_daily_returns_renorm,
 )
 from similarity_forecast.regime_labels import attach_regime_labels_from_data, compute_horizon_cross_sectional_stats
-from similarity_forecast.embeddings import CorrEigenEmbedder, PCAWindowEmbedder, VolStatsEmbedder
+from similarity_forecast.embeddings import (
+    CorrEigenEmbedder,
+    EconomicStateEmbedder,
+    HybridStateEmbedder,
+    PCAWindowEmbedder,
+    VolStatsEmbedder,
+)
 from similarity_forecast.target_objects import CovarianceTarget, PrecisionTarget, VolTarget
 from similarity_forecast.core import (
     LogEuclideanSPDMean,
@@ -48,6 +56,7 @@ from similarity_forecast.core import (
     EuclideanMean,
     validate_window,
     project_to_spd,
+    assemble_corr_vol_covariance,
 )
 from similarity_forecast.regimes import RegimeModel
 from similarity_forecast.regime_clustering import make_regime_clusterer
@@ -184,6 +193,7 @@ def build_model(
     # pipeline stability
     output_shrink_toward_diag: float = 0.0,
     alpha_smooth_frac: float = 0.0,
+    neighbor_utility_temp: float = 0.0,
 ) -> RegimeAwareSimilarityForecaster:
     embedder_name = str(embedder_name).lower()
     aggregator_name = str(aggregator_name).lower()
@@ -203,8 +213,15 @@ def build_model(
     elif embedder_name == "vol_stats":
         # Rich vol embedding: distribution (mean, std, quantiles, IQR), trend (1st vs 2nd half), concentration (HHI).
         embedder = VolStatsEmbedder(ddof=int(ddof))
+    elif embedder_name in {"hybrid", "hybrid_state"}:
+        # Low-D multi-view state (factor/vol/autocorr/corr scalars); aimed at non-degenerate FCM memberships.
+        embedder = HybridStateEmbedder(k_factors=int(pca_k) if int(pca_k) > 0 else 5)
+    elif embedder_name in {"economic", "econ_state", "economic_state"}:
+        embedder = EconomicStateEmbedder(ddof=int(ddof))
     else:
-        raise ValueError("embedder.name must be one of {'pca','corr_eig','vol_stats'}")
+        raise ValueError(
+            "embedder.name must be one of {'pca','corr_eig','vol_stats','hybrid','economic'}"
+        )
 
     if target_type == "volatility":
         target = VolTarget(ddof=int(ddof))
@@ -272,7 +289,93 @@ def build_model(
         regime_aggregation=str(regime_aggregation).lower(),
         output_shrink_toward_diag=float(output_shrink_toward_diag),
         alpha_smooth_frac=float(alpha_smooth_frac),
+        neighbor_utility_temp=float(neighbor_utility_temp),
     )
+
+
+def _select_adaptive_mix_alpha(
+    *,
+    model: RegimeAwareSimilarityForecaster,
+    R: np.ndarray,
+    dates: pd.DatetimeIndex,
+    lookback: int,
+    horizon: int,
+    k_neighbors: int,
+    neighbor_gap: int,
+    use_filter: bool,
+    ddof: int,
+    floor_eps: float,
+    partner: str,
+    grid: list[float],
+    val_frac: float,
+    long_only: bool,
+    ewma_lam: float = 0.94,
+) -> float:
+    """
+    Pick convex weight α in Σ = (1-α) Σ_model + α Σ_partner that minimizes
+    mean realized GMVP variance on a trailing validation slice of the training
+    sample (no held-out peeking). α=0 ⇒ pure model.
+    """
+    partner = str(partner).lower()
+    T = int(R.shape[0])
+    # Validation anchors: last val_frac of eligible training anchors
+    start = int(lookback) + int(horizon)
+    end = T - int(horizon) - 1
+    if end <= start + 5:
+        return 0.0
+    anchors = list(range(start, end + 1, max(5, int(horizon) // 2)))
+    n_val = max(8, int(len(anchors) * float(val_frac)))
+    val_anchors = anchors[-n_val:]
+    grid = [float(a) for a in grid]
+    if not grid:
+        grid = [0.0, 0.25, 0.5, 0.75, 1.0]
+
+    scores = {a: [] for a in grid}
+    for raw_anchor in val_anchors:
+        past = R[raw_anchor - int(lookback) + 1 : raw_anchor + 1, :]
+        fut = R[raw_anchor + 1 : raw_anchor + int(horizon) + 1, :]
+        if not validate_window(past) or not validate_window(fut):
+            continue
+        try:
+            Sigma_hat, _, _ = model.predict_at_raw_anchor(
+                past=past,
+                raw_anchor=int(raw_anchor),
+                k_neighbors=int(k_neighbors),
+                use_filter=bool(use_filter),
+                neighbor_gap=int(neighbor_gap),
+                return_regime=True,
+            )
+        except Exception:
+            continue
+        Sigma_hat = project_to_spd(np.asarray(Sigma_hat, dtype=float), eps=1e-8)
+        if partner == "lw":
+            S_p = baseline_ledoit_wolf(past, ddof=int(ddof))
+        elif partner == "ewma":
+            S_p = baseline_ewma_cov(past, lam=float(ewma_lam), ddof=int(ddof))
+        elif partner == "pers":
+            S_p = baseline_persistence_realized_cov(
+                R, raw_anchor=int(raw_anchor), horizon=int(horizon), ddof=int(ddof)
+            )
+        else:
+            S_p = baseline_rolling_cov(past, ddof=int(ddof))
+        S_p = project_to_spd(np.asarray(S_p, dtype=float), eps=1e-8)
+        for a in grid:
+            S = project_to_spd((1.0 - a) * Sigma_hat + a * S_p, eps=1e-8)
+            S = S + float(floor_eps) * np.eye(S.shape[0])
+            try:
+                w = gmvp_weights(S, long_only=bool(long_only))
+                st = hold_period_portfolio_stats(fut=fut, w=w)
+                v = float(st.get("gmvp_var", np.nan))
+            except Exception:
+                v = float("nan")
+            if np.isfinite(v):
+                scores[a].append(v)
+
+    means = {a: float(np.mean(vs)) for a, vs in scores.items() if len(vs) >= 5}
+    if not means:
+        return 0.0
+    best = min(means.items(), key=lambda kv: kv[1])[0]
+    return float(best)
 
 
 # ----------------------------
@@ -365,6 +468,24 @@ def run_backtest(
     alpha_smooth_frac: float = 0.0,         # blend regime alpha with uniform; 0=off
     # GMVP only: convex blend Σ_model ← S_shrink before inversion (matrix error metrics unchanged)
     model_sigma_gmvp_shrink_blend: float = 0.0,
+    # Corr–vol factorization: keep model correlation, replace vols from a local forecaster
+    corr_vol_enabled: bool = False,
+    corr_vol_source: str = "pers",  # "pers" | "ewma" | "roll"
+    corr_vol_ewma_lam: float = 0.94,
+    # Blend trigger: "regime_conf" (default) or "disagreement" vs persistence
+    model_blend_mode: str = "regime_conf",  # "regime_conf" | "disagreement"
+    model_blend_disagreement_scale: float = 1.0,  # Frobenius scale for disagreement→unc
+    # Decision overlay: if GMVP leverage of model Σ exceeds threshold, use roll Σ for GMVP
+    gmvp_leverage_gate_threshold: float = 0.0,  # 0=off; e.g. 1.52 from tune-only selection
+    gmvp_leverage_gate_fallback: str = "roll",  # "roll" | "pers" | "shrink"
+    neighbor_utility_temp: float = 0.0,
+    # Refit-time adaptive convex mix Σ=(1-α)Σ_model + α Σ_partner
+    adaptive_mix_enabled: bool = False,
+    adaptive_mix_partner: str = "lw",  # lw|roll|pers|ewma
+    adaptive_mix_grid: list | None = None,
+    adaptive_mix_val_frac: float = 0.25,
+    # Average GMVP weights of neighbor target covariances (decision-space aggregation)
+    gmvp_neighbor_weight_avg: bool = False,
 ) -> pd.DataFrame:
     if not isinstance(returns_df.index, pd.DatetimeIndex):
         raise ValueError("returns_df.index must be a DatetimeIndex.")
@@ -400,6 +521,8 @@ def run_backtest(
     last_refit_raw_anchor: int | None = None
     last_refit_date: pd.Timestamp | None = None
     model: RegimeAwareSimilarityForecaster | None = None
+    adaptive_mix_alpha: float = 0.0
+    adaptive_mix_grid = list(adaptive_mix_grid) if adaptive_mix_grid else [0.0, 0.25, 0.5, 0.75, 1.0]
 
     rows: list[dict] = []
     target_type = str(target_type).lower()
@@ -411,6 +534,24 @@ def run_backtest(
     model_blend_to_pers_power = float(model_blend_to_pers_power)
     if not np.isfinite(model_blend_to_pers_power) or model_blend_to_pers_power <= 0:
         model_blend_to_pers_power = 1.0
+    corr_vol_source = str(corr_vol_source).lower()
+    if corr_vol_source not in {"pers", "ewma", "roll"}:
+        raise ValueError("stability.corr_vol_source must be 'pers', 'ewma', or 'roll'.")
+    model_blend_mode = str(model_blend_mode).lower()
+    if model_blend_mode not in {"regime_conf", "disagreement"}:
+        raise ValueError("stability.model_blend_mode must be 'regime_conf' or 'disagreement'.")
+    model_blend_disagreement_scale = float(model_blend_disagreement_scale)
+    if not np.isfinite(model_blend_disagreement_scale) or model_blend_disagreement_scale <= 0:
+        model_blend_disagreement_scale = 1.0
+    corr_vol_ewma_lam = float(corr_vol_ewma_lam)
+    if not np.isfinite(corr_vol_ewma_lam) or not (0.0 < corr_vol_ewma_lam < 1.0):
+        corr_vol_ewma_lam = 0.94
+    gmvp_leverage_gate_threshold = float(gmvp_leverage_gate_threshold)
+    if not np.isfinite(gmvp_leverage_gate_threshold) or gmvp_leverage_gate_threshold < 0:
+        gmvp_leverage_gate_threshold = 0.0
+    gmvp_leverage_gate_fallback = str(gmvp_leverage_gate_fallback).lower()
+    if gmvp_leverage_gate_fallback not in {"roll", "pers", "shrink"}:
+        raise ValueError("stability.gmvp_leverage_gate_fallback must be 'roll', 'pers', or 'shrink'.")
     model_sigma_gmvp_shrink_blend = float(np.clip(model_sigma_gmvp_shrink_blend, 0.0, 1.0))
     guardrail_mode = str(guardrail_mode).lower()
     if guardrail_mode not in {"invalid_only", "ratio_or_invalid"}:
@@ -481,12 +622,36 @@ def run_backtest(
                 regime_aggregation=str(regime_aggregation),
                 output_shrink_toward_diag=float(output_shrink_toward_diag),
                 alpha_smooth_frac=float(alpha_smooth_frac),
+                neighbor_utility_temp=float(neighbor_utility_temp),
             )
 
             if verbose:
                 print(f"[refit] raw_anchor={raw_anchor} date={anchor_date.date()} train_T={len(train_df)}")
 
             model.fit(train_df)
+
+            if adaptive_mix_enabled and (not is_vol):
+                adaptive_mix_alpha = _select_adaptive_mix_alpha(
+                    model=model,
+                    R=train_df.to_numpy(dtype=float),
+                    dates=train_df.index,
+                    lookback=int(lookback),
+                    horizon=int(horizon),
+                    k_neighbors=int(k_neighbors),
+                    neighbor_gap=int(neighbor_gap),
+                    use_filter=bool(use_filter),
+                    ddof=int(ddof),
+                    floor_eps=float(floor_eps),
+                    partner=str(adaptive_mix_partner),
+                    grid=list(adaptive_mix_grid),
+                    val_frac=float(adaptive_mix_val_frac),
+                    long_only=bool(long_only),
+                )
+                if verbose:
+                    print(
+                        f"        adaptive_mix α*={adaptive_mix_alpha:.2f} "
+                        f"partner={adaptive_mix_partner}"
+                    )
 
             t0 = 0 if (model.anchor_dates_ is None) else len(model.anchor_dates_)
             if model.anchor_dates_ is None or t0 < int(min_samples_for_gmm):
@@ -529,17 +694,22 @@ def run_backtest(
                 use_filter=use_filter,
                 neighbor_gap=int(neighbor_gap),
                 return_regime=True,
+                return_neighbors=bool(gmvp_neighbor_weight_avg) and (not is_vol),
             )
         except Exception as e:
             if verbose:
                 print(f"[skip] raw_anchor={raw_anchor} date={anchor_date.date()} prediction failed: {e}")
             continue
 
+        neighbors_info = None
         if is_vol:
             vol_hat, alpha_t, pi_t = pred_out[0], pred_out[1], pred_out[2]
             vol_hat = np.asarray(vol_hat, dtype=float).reshape(-1)
         else:
-            Sigma_hat, alpha_t, pi_t = pred_out[0], pred_out[1], pred_out[2]
+            if bool(gmvp_neighbor_weight_avg) and len(pred_out) >= 4:
+                Sigma_hat, alpha_t, pi_t, neighbors_info = pred_out[0], pred_out[1], pred_out[2], pred_out[3]
+            else:
+                Sigma_hat, alpha_t, pi_t = pred_out[0], pred_out[1], pred_out[2]
             Sigma_hat = np.asarray(Sigma_hat, dtype=float)
             P_hat = None
             if is_precision:
@@ -617,6 +787,36 @@ def run_backtest(
         S_shrink = project_to_spd((S_shrink + S_shrink.T) / 2.0, eps=1e-8)
 
         # ----------------------------
+        # (4b) Optional corr–vol factorization
+        # Keep model dependence structure; replace scales with a local vol forecaster.
+        # ----------------------------
+        if corr_vol_enabled:
+            if corr_vol_source == "ewma":
+                S_vol_src = baseline_ewma_cov(past, lam=float(corr_vol_ewma_lam), ddof=int(ddof))
+            elif corr_vol_source == "roll":
+                S_vol_src = S_roll
+            else:
+                S_vol_src = S_pers
+            Sigma_hat = assemble_corr_vol_covariance(Sigma_hat, S_vol_src)
+
+        # Refit-selected adaptive mix toward a classical partner (LW/roll/pers/EWMA)
+        if adaptive_mix_enabled and float(adaptive_mix_alpha) > 0.0:
+            p = str(adaptive_mix_partner).lower()
+            if p == "lw":
+                S_partner = baseline_ledoit_wolf(past, ddof=int(ddof))
+            elif p == "ewma":
+                S_partner = baseline_ewma_cov(past, lam=float(corr_vol_ewma_lam), ddof=int(ddof))
+            elif p == "pers":
+                S_partner = S_pers
+            else:
+                S_partner = S_roll
+            a = float(np.clip(adaptive_mix_alpha, 0.0, 1.0))
+            Sigma_hat = project_to_spd(
+                (1.0 - a) * np.asarray(Sigma_hat, dtype=float) + a * np.asarray(S_partner, dtype=float),
+                eps=1e-8,
+            )
+
+        # ----------------------------
         # (5) Trace rescale then guardrail on model Sigma_hat
         # Rescale so trace is in [lo, hi] relative to S_roll; then guardrail only for invalid/NaN.
         # ----------------------------
@@ -643,24 +843,35 @@ def run_backtest(
         conf_adj = float("nan")
         model_pers_blend_lambda = 1.0
         if model_blend_to_pers_strength > 0.0:
-            # Confidence adjusted so uniform alpha => 0, one-hot => 1
-            K = int(alpha_t.size) if hasattr(alpha_t, "size") else 0
-            if K > 1:
-                conf_adj = (conf_raw - (1.0 / K)) / (1.0 - (1.0 / K))
-                conf_adj = float(np.clip(conf_adj, 0.0, 1.0))
-            elif K == 1:
-                conf_adj = 1.0
+            if model_blend_mode == "disagreement":
+                # State-dependent shrink toward persistence from forecast disagreement
+                # (does not collapse when soft α is near-uniform).
+                diff = np.asarray(Sigma_hat_use, dtype=float) - np.asarray(S_pers, dtype=float)
+                num = float(np.linalg.norm(diff, ord="fro"))
+                den = float(np.linalg.norm(np.asarray(S_pers, dtype=float), ord="fro")) + 1e-12
+                unc = float(np.clip(num / (den * model_blend_disagreement_scale), 0.0, 1.0))
+                conf_adj = 1.0 - unc
             else:
-                conf_adj = 0.0
-
-            # If threshold enabled, only blend below it; scale to [0,1] "uncertainty" within that region.
-            if model_blend_to_pers_conf_threshold > 0.0:
-                if conf_adj >= model_blend_to_pers_conf_threshold:
-                    unc = 0.0
+                # Confidence adjusted so uniform alpha => 0, one-hot => 1
+                K = int(alpha_t.size) if hasattr(alpha_t, "size") else 0
+                if K > 1:
+                    conf_adj = (conf_raw - (1.0 / K)) / (1.0 - (1.0 / K))
+                    conf_adj = float(np.clip(conf_adj, 0.0, 1.0))
+                elif K == 1:
+                    conf_adj = 1.0
                 else:
-                    unc = (model_blend_to_pers_conf_threshold - conf_adj) / max(model_blend_to_pers_conf_threshold, 1e-12)
-            else:
-                unc = 1.0 - conf_adj
+                    conf_adj = 0.0
+
+                # If threshold enabled, only blend below it; scale to [0,1] "uncertainty" within that region.
+                if model_blend_to_pers_conf_threshold > 0.0:
+                    if conf_adj >= model_blend_to_pers_conf_threshold:
+                        unc = 0.0
+                    else:
+                        unc = (model_blend_to_pers_conf_threshold - conf_adj) / max(
+                            model_blend_to_pers_conf_threshold, 1e-12
+                        )
+                else:
+                    unc = 1.0 - conf_adj
             # Shape: power>1 makes blending more selective (near 0 unless confidence is low).
             unc = float(np.clip(unc, 0.0, 1.0)) ** float(model_blend_to_pers_power)
 
@@ -730,10 +941,49 @@ def run_backtest(
             w_model = w_model.astype(float)
         else:
             w_model  = gmvp_weights(S_model_use, long_only=bool(long_only))
+
+        # Decision-space aggregation: average neighbor GMVP weights (regime-weighted)
+        if (not is_vol) and gmvp_neighbor_weight_avg and neighbors_info is not None:
+            try:
+                idx_n = np.asarray(neighbors_info["indices"], dtype=int)
+                W = np.asarray(neighbors_info["W"], dtype=float)  # (K, M)
+                a = np.asarray(alpha_t, dtype=float).reshape(-1)
+                a = a / max(float(a.sum()), 1e-12)
+                # neighbor mixing weights: alpha @ W -> (M,)
+                nw = a @ W
+                nw = nw / max(float(nw.sum()), 1e-12)
+                w_acc = np.zeros_like(w_model, dtype=float)
+                for j, ii in enumerate(idx_n):
+                    Sj = np.asarray(model.targets_[int(ii)], dtype=float)
+                    if is_precision:
+                        # targets are precision; invert for GMVP-from-cov path
+                        Sj = project_to_spd(np.linalg.inv(project_to_spd(Sj, eps=1e-8)), eps=1e-8)
+                    Sj = _spd_floor(Sj, float(floor_eps))
+                    wj = gmvp_weights(Sj, long_only=bool(long_only))
+                    w_acc = w_acc + float(nw[j]) * wj
+                s = float(np.sum(w_acc))
+                if np.isfinite(s) and abs(s) > 1e-12:
+                    w_model = (w_acc / s).astype(float)
+            except Exception:
+                pass
+
         w_mix    = gmvp_weights(S_mix_use,   long_only=bool(long_only))
         w_roll_i = gmvp_weights(S_roll_use,  long_only=bool(long_only))
         w_pers_i = gmvp_weights(S_pers_use,  long_only=bool(long_only))
         w_shrk_i = gmvp_weights(S_shrk_use,  long_only=bool(long_only))
+
+        # Decision overlay: replace model GMVP with a baseline when leverage is high.
+        leverage_gate_triggered = False
+        model_w_l1_pre_gate = float(np.sum(np.abs(w_model)))
+        if (not is_vol) and gmvp_leverage_gate_threshold > 0.0:
+            if np.isfinite(model_w_l1_pre_gate) and model_w_l1_pre_gate >= gmvp_leverage_gate_threshold:
+                leverage_gate_triggered = True
+                if gmvp_leverage_gate_fallback == "pers":
+                    w_model = np.asarray(w_pers_i, dtype=float).copy()
+                elif gmvp_leverage_gate_fallback == "shrink":
+                    w_model = np.asarray(w_shrk_i, dtype=float).copy()
+                else:
+                    w_model = np.asarray(w_roll_i, dtype=float).copy()
 
         turn_model = _turnover(w_prev["model"],  w_model)
         turn_mix   = _turnover(w_prev["mix"],    w_mix)
@@ -812,6 +1062,12 @@ def run_backtest(
             "model_blend_to_pers_strength": float(model_blend_to_pers_strength),
             "model_blend_to_pers_conf_threshold": float(model_blend_to_pers_conf_threshold),
             "model_blend_to_pers_power": float(model_blend_to_pers_power),
+            "gmvp_leverage_gate_threshold": float(gmvp_leverage_gate_threshold),
+            "gmvp_leverage_gate_fallback": str(gmvp_leverage_gate_fallback),
+            "gmvp_leverage_gate_triggered": bool(leverage_gate_triggered),
+            "model_w_l1_pre_gate": float(model_w_l1_pre_gate),
+            "adaptive_mix_alpha": float(adaptive_mix_alpha),
+            "adaptive_mix_partner": str(adaptive_mix_partner),
             "mix_lambda": float(mix_lambda),
             "shrink_gamma": float(shrink_gamma),
             "floor_eps": float(floor_eps),
@@ -986,6 +1242,19 @@ def run_backtest_from_config(cfg: dict, *, verbose: bool | None = None) -> tuple
         output_shrink_toward_diag=float(mcfg.get("output_shrink_toward_diag", 0)),
         alpha_smooth_frac=float(mcfg.get("alpha_smooth_frac", 0)),
         model_sigma_gmvp_shrink_blend=float(stcfg.get("model_sigma_gmvp_shrink_blend", 0.0)),
+        corr_vol_enabled=bool(stcfg.get("corr_vol_enabled", False)),
+        corr_vol_source=str(stcfg.get("corr_vol_source", "pers")),
+        corr_vol_ewma_lam=float(stcfg.get("corr_vol_ewma_lam", 0.94)),
+        model_blend_mode=str(stcfg.get("model_blend_mode", "regime_conf")),
+        model_blend_disagreement_scale=float(stcfg.get("model_blend_disagreement_scale", 1.0)),
+        gmvp_leverage_gate_threshold=float(stcfg.get("gmvp_leverage_gate_threshold", 0.0)),
+        gmvp_leverage_gate_fallback=str(stcfg.get("gmvp_leverage_gate_fallback", "roll")),
+        neighbor_utility_temp=float(mcfg.get("neighbor_utility_temp", 0.0)),
+        adaptive_mix_enabled=bool(stcfg.get("adaptive_mix_enabled", False)),
+        adaptive_mix_partner=str(stcfg.get("adaptive_mix_partner", "lw")),
+        adaptive_mix_grid=stcfg.get("adaptive_mix_grid"),
+        adaptive_mix_val_frac=float(stcfg.get("adaptive_mix_val_frac", 0.25)),
+        gmvp_neighbor_weight_avg=bool(stcfg.get("gmvp_neighbor_weight_avg", False)),
     )
     try:
         results = attach_regime_labels_from_data(results, save_json_path=None)
@@ -1109,6 +1378,19 @@ def main():
         output_shrink_toward_diag=float(mcfg.get("output_shrink_toward_diag", 0)),
         alpha_smooth_frac=float(mcfg.get("alpha_smooth_frac", 0)),
         model_sigma_gmvp_shrink_blend=float(stcfg.get("model_sigma_gmvp_shrink_blend", 0.0)),
+        corr_vol_enabled=bool(stcfg.get("corr_vol_enabled", False)),
+        corr_vol_source=str(stcfg.get("corr_vol_source", "pers")),
+        corr_vol_ewma_lam=float(stcfg.get("corr_vol_ewma_lam", 0.94)),
+        model_blend_mode=str(stcfg.get("model_blend_mode", "regime_conf")),
+        model_blend_disagreement_scale=float(stcfg.get("model_blend_disagreement_scale", 1.0)),
+        gmvp_leverage_gate_threshold=float(stcfg.get("gmvp_leverage_gate_threshold", 0.0)),
+        gmvp_leverage_gate_fallback=str(stcfg.get("gmvp_leverage_gate_fallback", "roll")),
+        neighbor_utility_temp=float(mcfg.get("neighbor_utility_temp", 0.0)),
+        adaptive_mix_enabled=bool(stcfg.get("adaptive_mix_enabled", False)),
+        adaptive_mix_partner=str(stcfg.get("adaptive_mix_partner", "lw")),
+        adaptive_mix_grid=stcfg.get("adaptive_mix_grid"),
+        adaptive_mix_val_frac=float(stcfg.get("adaptive_mix_val_frac", 0.25)),
+        gmvp_neighbor_weight_avg=bool(stcfg.get("gmvp_neighbor_weight_avg", False)),
     )
 
     try:
