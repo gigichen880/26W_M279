@@ -1,0 +1,15 @@
+\begin{table}[t]
+\centering
+\caption{Post-hoc extreme-return filters on the frozen OOS panel ($\eta=0.01$; models unchanged). Under future cleaning, SIM's mean Frobenius collapses while several classical means remain large; lookback+future cleaning normalizes means and removes SIM's median-Frobenius lead, but SIM stays last on Stein and $R^{\mathrm{cond}}$.}
+\label{tab:dataqual}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+Filter & $n$ & SIM med. & Best other med. & SIM mean & Max other mean & SIM ranks \\
+\midrule
+Full panel & 247 & 0.014 & 0.017 (LW) & 0.0347 & 0.0437 (Pers.) & Stein/$R$: 7/7 \\
+Future $|r|\le 0.5$ & 217 & 0.013 & 0.014 (LW) & 0.0241 & 0.0348 (Pers.) & Stein/$R$: 7/7 \\
+Lookback+future $|r|\le 0.5$ & 152 & 0.013 & 0.011 (LW) & 0.0174 & 0.0197 (Pers.) & Stein/$R$: 7/7 \\
+\bottomrule
+\end{tabular}}
+\end{table}

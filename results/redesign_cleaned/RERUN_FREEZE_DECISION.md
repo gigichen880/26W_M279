@@ -1,0 +1,18 @@
+# RERUN freeze decision (cleaned data)
+
+Written BEFORE any 2017-2021 evaluation of this rerun.
+
+Frozen config: {'embedder_name': 'pca_only', 'pca_k': 8, 'method_label': 'D0_pca8', 'k_neighbors': 20, 'metric': 'euclidean', 'aggregation': 'log_euclidean', 'eta': 0.01, 'regime_mode': 'none'}
+
+Basis: {
+  "stage_a_mean_var_regret": {
+    "stage_a_pca8": 9.503078826686671e-05,
+    "stage_a_market_state": 9.643172354806508e-05,
+    "stage_a_spectral": 9.547390120665987e-05,
+    "stage_a_hybrid": 9.973560256279638e-05
+  },
+  "regime_increment_supported": false,
+  "regime_note": "5 contrasts; 2 exclude zero; 0 favor regimes",
+  "rule": "primary=mean R_raw on 2013-2016; regimes only if incremental CI excludes zero in their favor; simplicity tie-break",
+  "data": "returns_universe_100_cleaned_cellwise.parquet (cellwise-cleaned; swapped in as returns_universe_100.parquet for this rerun)"
+}

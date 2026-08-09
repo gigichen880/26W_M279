@@ -1,0 +1,11 @@
+{
+  "frozen_model": "D0_pca8",
+  "official_eta": 0.01,
+  "eta_grid": [
+    0.001,
+    0.01,
+    0.05
+  ],
+  "Lmax_gross": 2.0,
+  "note": "Robustness only; no architecture reselection on OOS."
+}

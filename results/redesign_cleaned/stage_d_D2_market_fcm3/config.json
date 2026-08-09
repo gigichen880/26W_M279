@@ -1,0 +1,36 @@
+{
+  "tag": "stage_d_D2_market_fcm3",
+  "parquet_path": "/home/classdmi/rerun_cleaned/data/processed/returns_universe_100.parquet",
+  "protocol": {
+    "lookback": 50,
+    "horizon": 20,
+    "neighbor_gap": 10,
+    "stride": 5,
+    "refit_every_days": 20,
+    "burn_in": 252,
+    "devel_end": "2012-12-31",
+    "select_end": "2016-12-31",
+    "test_start": "2017-01-01",
+    "random_state": 0
+  },
+  "embedder_name": "market_state",
+  "pca_k": 6,
+  "k_neighbors": 20,
+  "metric": "euclidean",
+  "aggregation": "log_euclidean",
+  "conditioning": {
+    "eta": 0.01,
+    "diag_shrink": 0.0,
+    "abs_floor": 0.0
+  },
+  "baselines": [
+    "rolling",
+    "ledoit_wolf"
+  ],
+  "eval_split": "select",
+  "outdir": "/home/classdmi/rerun_cleaned/results/redesign",
+  "regime_mode": "overlap",
+  "regime_name": "fcm",
+  "regime_n_states": 3,
+  "method_label": "D2_market_fcm3"
+}
